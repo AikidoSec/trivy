@@ -703,13 +703,6 @@ func (p *Parser) remoteRepoRequest(repo string, paths []string) (*http.Request, 
 	paths = append([]string{repoURL.Path}, paths...)
 	repoURL.Path = path.Join(paths...)
 
-	// don't do requests to `people.apache.org`. as it
-	if strings.Contains(repoURL.Host, "people.apache.org") {
-		// this domain is used to fetch pom files in some cases, but it just nearly always times out and makes everything extremely slow
-		// so we just skip it
-		return nil, xerrors.Errorf("people.apache.org is blocklisted")
-	}
-
 	req, err := http.NewRequest(http.MethodGet, repoURL.String(), http.NoBody)
 	if err != nil {
 		return nil, xerrors.Errorf("unable to create HTTP request: %w", err)
