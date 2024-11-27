@@ -4,54 +4,45 @@ on:
     tags:
       - "v*"
 
+env:
+  GO_VERSION: '1.22'
+
 jobs:
   release:
     name: Release
-    uses: ./.github/workflows/reusable-release.yaml
-    with:
-      goreleaser_config: goreleaser.yml
-      goreleaser_options: '--clean --timeout 90m'
-    secrets: inherit
+    runs-on: ubuntu-latest
 
-  deploy-packages:
-    name: Deploy rpm/dep packages
-    needs: release # run this job after 'release' job completes
-    runs-on: ubuntu-22.04
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4.1.6
         with:
           fetch-depth: 0
 
-      - name: Restore Trivy binaries from cache
-        uses: actions/cache@v4.0.2
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          path: dist/
-          key: ${{ runner.os }}-bins-${{github.workflow}}-${{github.sha}}
+          go-version: ${{ env.GO_VERSION }}
+          cache: false # Disable cache to avoid free space issues during `Post Setup Go` step.
 
-      - name: Install dependencies
+
+      # Create tmp dir for GoReleaser
+      - name: "create tmp dir"
         run: |
-          sudo apt-get -y update
-          sudo apt-get -y install rpm reprepro createrepo-c distro-info
+          mkdir tmp
 
-      - name: Checkout trivy-repo
-        uses: actions/checkout@v4.1.6
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
-          repository: ${{ github.repository_owner }}/trivy-repo
-          path: trivy-repo
-          fetch-depth: 0
-          token: ${{ secrets.ORG_REPO_TOKEN }}
+          version: v2.1.0
+          args: release -f=goreleaser.yml --skip=publish --clean --timeout 90m
+        env:
+          GITHUB_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
+          TMPDIR: "tmp"
 
-      - name: Setup git settings
-        run: |
-          git config --global user.email "knqyf263@gmail.com"
-          git config --global user.name "Teppei Fukuda"
+      - name: Upload assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy
+          path: dist/*
 
-      - name: Create rpm repository
-        run: ci/deploy-rpm.sh
-
-      - name: Import GPG key
-        run: echo -e "${{ secrets.GPG_KEY }}" | gpg --import
-
-      - name: Create deb repository
-        run: ci/deploy-deb.sh
