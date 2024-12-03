@@ -143,7 +143,7 @@ func (p *pom) repositories(servers []Server) ([]string, []string) {
 		// remove all people.apache.org repositories
 		// this domain is used to fetch pom files in some cases, but it just nearly always times out and makes everything extremely slow
 		// so we just skip it
-		if strings.Contains(repoURL.Host, "people.apache.org") {
+		if strings.Contains(repoURL.Host, ".apache.org") {
 			logger.Debug("Skipping people.apache.org repository", log.String("url", rep.URL))
 			continue
 		}
