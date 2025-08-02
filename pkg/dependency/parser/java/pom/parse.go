@@ -742,19 +742,28 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) 
 		return "", nil
 	}
 
+	reqUrl := req.URL.String()
+	if isUnresolvableRemoteRepoPath(reqUrl) {
+		p.logger.Debug("Unresolvable remote repository path", log.String("repo", reqUrl))
+		return "", nil
+	}
+
 	client := xhttp.Client()
 	resp, err := client.Do(req)
 	if err != nil {
-		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Err(err))
+		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Err(err))
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return "", nil
 	} else if resp.StatusCode != http.StatusOK {
-		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
+		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Int("statusCode", resp.StatusCode))
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return "", nil
 	}
 	defer resp.Body.Close()
 
 	mavenMetadata, err := parseMavenMetadata(resp.Body)
 	if err != nil {
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return "", xerrors.Errorf("failed to parse maven-metadata.xml file: %w", err)
 	}
 
@@ -776,19 +785,29 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo string, paths []string) (*pom
 		return nil, nil
 	}
 
+	reqUrl := req.URL.String()
+	if isUnresolvableRemoteRepoPath(reqUrl) {
+		p.logger.Debug("Unresolvable remote repository", log.String("repo", reqUrl))
+		addUnresolvableRemoteRepoPath(reqUrl)
+		return nil, nil
+	}
+
 	client := xhttp.Client()
 	resp, err := client.Do(req)
 	if err != nil {
-		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Err(err))
+		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Err(err))
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return nil, nil
 	} else if resp.StatusCode != http.StatusOK {
-		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
+		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Int("statusCode", resp.StatusCode))
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return nil, nil
 	}
 	defer resp.Body.Close()
 
 	content, err := parsePom(resp.Body, false)
 	if err != nil {
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
 	}
 
