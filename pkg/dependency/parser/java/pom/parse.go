@@ -770,6 +770,11 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) 
 }
 
 func (p *Parser) fetchPOMFromRemoteRepository(repo string, paths []string) (*pom, error) {
+	if isUnresolvableRemoteRepo(repo) {
+		p.logger.Debug("Unresolvable remote repository", log.String("repo", repo))
+		return nil, nil
+	}
+
 	req, err := p.remoteRepoRequest(repo, paths)
 	if err != nil {
 		p.logger.Debug("Unable to create request", log.String("repo", repo), log.Err(err))
@@ -780,15 +785,18 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo string, paths []string) (*pom
 	resp, err := client.Do(req)
 	if err != nil {
 		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Err(err))
+		addUnresolvableRemoteRepo(repo)
 		return nil, nil
 	} else if resp.StatusCode != http.StatusOK {
 		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
+		addUnresolvableRemoteRepo(repo)
 		return nil, nil
 	}
 	defer resp.Body.Close()
 
 	content, err := parsePom(resp.Body, false)
 	if err != nil {
+		addUnresolvableRemoteRepo(repo)
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
 	}
 

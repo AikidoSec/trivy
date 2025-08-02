@@ -5,44 +5,23 @@ on:
       - "v*"
 
 jobs:
-  goreleaser:
+  build:
+    uses: ./.github/workflows/build-aikido.yaml
+
+  release:
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4.1.6
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: v2.1.0
-          args: release --skip publish --clean -f=goreleaser-aikido.yml
-
-      - name: List files
-        run: |
-          ls -lR dist
-
-      - name: Rename trivy binary
-        run: |
-          mv dist/build-linux_linux_amd64_v1/trivy dist/build-linux_linux_amd64_v1/trivy-${{ github.ref_name }}-linux-amd64
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          path: dist/build-linux_linux_amd64_v1/trivy-${{ github.ref_name }}-linux-amd64
+          name: artifact
+          path: dist
 
       - name: Deploy to GitHub Release
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2
         with:
           files: |
-            dist/build-linux_linux_amd64_v1/trivy-${{ github.ref_name }}-linux-amd64
+            dist/trivy-${{ github.ref_name }}-linux-amd64
