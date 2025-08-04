@@ -746,6 +746,11 @@ func (p *Parser) remoteRepoRequest(repo string, paths []string) (*http.Request, 
 
 // fetchPomFileNameFromMavenMetadata fetches `maven-metadata.xml` file to detect file name of pom file.
 func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) (string, error) {
+	if isObsoleteRepo(repo) {
+		p.logger.Debug("Obsolete remote repository", log.String("repo", repo))
+		return "", nil
+	}
+
 	// Overwrite pom file name to `maven-metadata.xml`
 	mavenMetadataPaths := slices.Clone(paths[:len(paths)-1]) // Clone slice to avoid shadow overwriting last element of `paths`
 	mavenMetadataPaths = append(mavenMetadataPaths, "maven-metadata.xml")
@@ -757,8 +762,8 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) 
 	}
 
 	reqUrl := req.URL.String()
-	if isUnresolvableRemoteRepoPath(repo) {
-		p.logger.Debug("Unresolvable remote repository", log.String("repo", repo))
+	if isUnresolvableRemoteRepoPath(reqUrl) {
+		p.logger.Debug("Unresolvable remote repository", log.String("repo-path", reqUrl))
 		return "", nil
 	}
 
@@ -766,18 +771,17 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) 
 	resp, err := client.Do(req)
 	if err != nil {
 		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Err(err))
-		addUnresolvableRemoteRepoPath(repo)
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return "", nil
 	} else if resp.StatusCode != http.StatusOK {
 		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Int("statusCode", resp.StatusCode))
-		addUnresolvableRemoteRepoPath(repo)
 		return "", nil
 	}
 	defer resp.Body.Close()
 
 	mavenMetadata, err := parseMavenMetadata(resp.Body)
 	if err != nil {
-		addUnresolvableRemoteRepoPath(repo)
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return "", xerrors.Errorf("failed to parse maven-metadata.xml file: %w", err)
 	}
 
@@ -793,6 +797,11 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) 
 }
 
 func (p *Parser) fetchPOMFromRemoteRepository(repo string, paths []string) (*pom, error) {
+	if isObsoleteRepo(repo) {
+		p.logger.Debug("Obsolete remote repository", log.String("repo", repo))
+		return nil, nil
+	}
+
 	req, err := p.remoteRepoRequest(repo, paths)
 	if err != nil {
 		p.logger.Debug("Unable to create request", log.String("repo", repo), log.Err(err))
@@ -800,9 +809,9 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo string, paths []string) (*pom
 	}
 
 	reqUrl := req.URL.String()
-	if isUnresolvableRemoteRepoPath(repo) {
-		p.logger.Debug("Unresolvable remote repository", log.String("repo", repo))
-		addUnresolvableRemoteRepoPath(repo)
+	if isUnresolvableRemoteRepoPath(reqUrl) {
+		p.logger.Debug("Unresolvable remote repository", log.String("repo-path", reqUrl))
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return nil, nil
 	}
 
@@ -810,18 +819,18 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo string, paths []string) (*pom
 	resp, err := client.Do(req)
 	if err != nil {
 		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Err(err))
-		addUnresolvableRemoteRepoPath(repo)
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return nil, nil
 	} else if resp.StatusCode != http.StatusOK {
+		addUnresolvableRemoteRepoPath(reqUrl)
 		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Int("statusCode", resp.StatusCode))
-		addUnresolvableRemoteRepoPath(repo)
 		return nil, nil
 	}
 	defer resp.Body.Close()
 
 	content, err := parsePom(resp.Body, false)
 	if err != nil {
-		addUnresolvableRemoteRepoPath(repo)
+		addUnresolvableRemoteRepoPath(reqUrl)
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
 	}
 
