@@ -18,5 +18,22 @@ builds:
     goarm:
       - 7
 
+  - id: build-macos
+    main: ./cmd/trivy/
+    binary: trivy
+    ldflags:
+      - -s -w
+      - "-extldflags '-static'"
+      - -X github.com/aquasecurity/trivy/pkg/version/app.ver={{.Version}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    goarm:
+      - 7
+
 
 
