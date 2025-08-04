@@ -32,7 +32,8 @@ const (
 )
 
 type options struct {
-	offline             bool
+	offline bool
+	//skipUnresolvable    bool
 	releaseRemoteRepos  []string
 	snapshotRemoteRepos []string
 }
@@ -44,6 +45,12 @@ func WithOffline(offline bool) option {
 		opts.offline = offline
 	}
 }
+
+// func WithSkipUnresolvable(skipUnresolvable bool) option {
+// 	return func(opts *options) {
+// 		opts.skipUnresolvable = skipUnresolvable
+// 	}
+// }
 
 func WithReleaseRemoteRepos(repos []string) option {
 	return func(opts *options) {
@@ -65,12 +72,14 @@ type Parser struct {
 	releaseRemoteRepos  []string
 	snapshotRemoteRepos []string
 	offline             bool
-	settings            settings
+	//skipUnresolvable    bool
+	settings settings
 }
 
 func NewParser(filePath string, opts ...option) *Parser {
 	o := &options{
 		offline: false,
+		//skipUnresolvable: false,
 	}
 
 	for _, opt := range opts {
@@ -84,6 +93,10 @@ func NewParser(filePath string, opts ...option) *Parser {
 		localRepository = filepath.Join(homeDir, ".m2", "repository")
 	}
 
+	// if o.skipUnresolvable {
+	// 	log.WithPrefix("pom").Debug("skip unresolvable is enabled")
+	// }
+
 	return &Parser{
 		logger:              log.WithPrefix("pom"),
 		rootPath:            filepath.Clean(filePath),
@@ -92,7 +105,8 @@ func NewParser(filePath string, opts ...option) *Parser {
 		releaseRemoteRepos:  o.releaseRemoteRepos,
 		snapshotRemoteRepos: o.snapshotRemoteRepos,
 		offline:             o.offline,
-		settings:            s,
+		//skipUnresolvable:    o.skipUnresolvable,
+		settings: s,
 	}
 }
 
@@ -743,8 +757,8 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) 
 	}
 
 	reqUrl := req.URL.String()
-	if isUnresolvableRemoteRepoPath(reqUrl) {
-		p.logger.Debug("Unresolvable remote repository path", log.String("repo-path", reqUrl))
+	if isUnresolvableRemoteRepoPath(repo) {
+		p.logger.Debug("Unresolvable remote repository", log.String("repo", repo))
 		return "", nil
 	}
 
@@ -752,18 +766,18 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) 
 	resp, err := client.Do(req)
 	if err != nil {
 		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Err(err))
-		addUnresolvableRemoteRepoPath(reqUrl)
+		addUnresolvableRemoteRepoPath(repo)
 		return "", nil
 	} else if resp.StatusCode != http.StatusOK {
 		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Int("statusCode", resp.StatusCode))
-		addUnresolvableRemoteRepoPath(reqUrl)
+		addUnresolvableRemoteRepoPath(repo)
 		return "", nil
 	}
 	defer resp.Body.Close()
 
 	mavenMetadata, err := parseMavenMetadata(resp.Body)
 	if err != nil {
-		addUnresolvableRemoteRepoPath(reqUrl)
+		addUnresolvableRemoteRepoPath(repo)
 		return "", xerrors.Errorf("failed to parse maven-metadata.xml file: %w", err)
 	}
 
@@ -786,9 +800,9 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo string, paths []string) (*pom
 	}
 
 	reqUrl := req.URL.String()
-	if isUnresolvableRemoteRepoPath(reqUrl) {
-		p.logger.Debug("Unresolvable remote repository", log.String("repo", reqUrl))
-		addUnresolvableRemoteRepoPath(reqUrl)
+	if isUnresolvableRemoteRepoPath(repo) {
+		p.logger.Debug("Unresolvable remote repository", log.String("repo", repo))
+		addUnresolvableRemoteRepoPath(repo)
 		return nil, nil
 	}
 
@@ -796,18 +810,18 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo string, paths []string) (*pom
 	resp, err := client.Do(req)
 	if err != nil {
 		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Err(err))
-		addUnresolvableRemoteRepoPath(reqUrl)
+		addUnresolvableRemoteRepoPath(repo)
 		return nil, nil
 	} else if resp.StatusCode != http.StatusOK {
 		p.logger.Debug("Failed to fetch", log.String("url", reqUrl), log.Int("statusCode", resp.StatusCode))
-		addUnresolvableRemoteRepoPath(reqUrl)
+		addUnresolvableRemoteRepoPath(repo)
 		return nil, nil
 	}
 	defer resp.Body.Close()
 
 	content, err := parsePom(resp.Body, false)
 	if err != nil {
-		addUnresolvableRemoteRepoPath(reqUrl)
+		addUnresolvableRemoteRepoPath(repo)
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
 	}
 
