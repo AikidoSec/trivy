@@ -1,0 +1,22 @@
+version: 2
+
+project_name: trivy
+builds:
+  - id: build-linux
+    main: ./cmd/trivy/
+    binary: trivy
+    ldflags:
+      - -s -w
+      - "-extldflags '-static'"
+      - -X github.com/aquasecurity/trivy/pkg/version/app.ver={{.Version}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+    goarm:
+      - 7
+
+
+
