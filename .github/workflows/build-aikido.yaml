@@ -24,7 +24,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           version: v2.1.0
-          args: build --clean -f=goreleaser-aikido.yml
+          args: build --snapshot --clean -f=goreleaser-aikido.yml
 
       - name: List files
         run: |
