@@ -744,7 +744,7 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo string, paths []string) 
 
 	reqUrl := req.URL.String()
 	if isUnresolvableRemoteRepoPath(reqUrl) {
-		p.logger.Debug("Unresolvable remote repository path", log.String("repo", reqUrl))
+		p.logger.Debug("Unresolvable remote repository path", log.String("repo-path", reqUrl))
 		return "", nil
 	}
 
