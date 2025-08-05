@@ -32,10 +32,10 @@ jobs:
 
       - name: Rename trivy binary
         run: |
-          mv dist/build-linux_linux_amd64_v1/trivy dist/build-linux_linux_amd64_v1/trivy-${{ github.ref_name }}-linux-amd64
-          mv dist/build-linux_linux_arm64/trivy dist/build-linux_linux_arm64/trivy-${{ github.ref_name }}-linux-arm64
-          mv dist/build-macos_darwin_arm64/trivy dist/build-macos_darwin_arm64/trivy-${{ github.ref_name }}-darwin-arm64
-          mv dist/build-windows_windows_amd64_v1/trivy.exe dist/build-windows_windows_amd64_v1/trivy-${{ github.ref_name }}-windows-amd64.exe
+          mv dist/build-linux_linux_amd64_v1/trivy dist/build-linux_linux_amd64_v1/trivy-linux-amd64
+          mv dist/build-linux_linux_arm64/trivy dist/build-linux_linux_arm64/trivy-linux-arm64
+          mv dist/build-macos_darwin_arm64/trivy dist/build-macos_darwin_arm64/trivy-darwin-arm64
+          mv dist/build-windows_windows_amd64_v1/trivy.exe dist/build-windows_windows_amd64_v1/trivy-windows-amd64.exe
     
       - name: Archive build artifacts
         uses: actions/upload-artifact@v4
@@ -43,7 +43,7 @@ jobs:
           name: trivy-binaries
           if-no-files-found: error
           path: |
-            dist/build-linux_linux_amd64_v1/trivy-${{ github.ref_name }}-linux-amd64
-            dist/build-linux_linux_arm64/trivy-${{ github.ref_name }}-linux-arm64
-            dist/build-macos_darwin_arm64/trivy-${{ github.ref_name }}-darwin-arm64
-            dist/build-windows_windows_amd64_v1/trivy-${{ github.ref_name }}-windows-amd64.exe
+            dist/build-linux_linux_amd64_v1/trivy-linux-amd64
+            dist/build-linux_linux_arm64/trivy-linux-arm64
+            dist/build-macos_darwin_arm64/trivy-darwin-arm64
+            dist/build-windows_windows_amd64_v1/trivy-windows-amd64.exe
