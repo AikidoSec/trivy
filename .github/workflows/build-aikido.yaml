@@ -1,0 +1,47 @@
+name: Build Aikido
+on:
+  pull_request:
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.1.6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.1.0
+          args: build --snapshot --clean -f=goreleaser-aikido.yml
+
+      - name: List files
+        run: |
+          ls -lR dist
+
+      - name: Rename trivy binary
+        run: |
+          mv dist/build-linux_linux_amd64_v1/trivy dist/build-linux_linux_amd64_v1/trivy-linux-amd64
+          mv dist/build-macos_darwin_amd64_v1/trivy dist/build-macos_darwin_amd64_v1/trivy-darwin-amd64
+          mv dist/build-macos_darwin_arm64/trivy dist/build-macos_darwin_arm64/trivy-darwin-arm64
+    
+      - name: Archive build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.AIKIDO_ARTIFACT }}-${{ env.ARCH }}
+          if-no-files-found: error
+          path: |
+            dist/build-linux_linux_amd64_v1/trivy-linux-amd64
+            dist/build-macos_darwin_amd64_v1/trivy-darwin-amd64
+            dist/build-macos_darwin_arm64/trivy-darwin-arm64
