@@ -230,14 +230,14 @@ func (p *pom) effectiveRepositories(settings *settings) []repository {
 		// Combine repositories from settings.xml (for those mirrors have already been applied)
 		repositories = append(repositories, settings.getEffectiveRepositories()...)
 	}
-	l := lo.UniqBy(repositories, func(r repository) string {
+	repositories = lo.UniqBy(repositories, func(r repository) string {
 		return r.ID
 	})
-	globalRepositories = append(globalRepositories, l...)
+	globalRepositories = append(globalRepositories, repositories...)
 	globalRepositories = lo.UniqBy(globalRepositories, func(r repository) string {
 		return r.ID
 	})
-	return l
+	return repositories
 }
 
 type pomXML struct {
