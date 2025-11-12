@@ -15,6 +15,7 @@ import (
 	"github.com/aquasecurity/table"
 	"github.com/aquasecurity/tml"
 	dbTypes "github.com/aquasecurity/trivy-db/pkg/types"
+	"github.com/aquasecurity/trivy/pkg/dependency/tree"
 	ftypes "github.com/aquasecurity/trivy/pkg/fanal/types"
 	"github.com/aquasecurity/trivy/pkg/types"
 )
@@ -66,6 +67,9 @@ type Options struct {
 	// For licenses
 	LicenseRiskThreshold int
 	IgnoredLicenses      []string
+
+	// For Aikido dependency tree
+	AikidoDependencyTree bool
 }
 
 func NewWriter(options Options) *Writer {
@@ -101,6 +105,11 @@ func (tw *Writer) Write(_ context.Context, report types.Report) error {
 				continue
 			}
 			tw.render(result)
+
+			// Render Aikido dependency tree if enabled
+			if tw.options.AikidoDependencyTree && len(result.Packages) > 0 {
+				tw.renderAikidoDependencyTree(result)
+			}
 		}
 	}
 
@@ -150,6 +159,19 @@ func newTableWriter(output io.Writer, isTerminal bool) *table.Table {
 	tableWriter.SetRowLines(true)
 
 	return tableWriter
+}
+
+// renderAikidoDependencyTree renders the Aikido dependency tree for the given result
+func (tw *Writer) renderAikidoDependencyTree(result types.Result) {
+	printOpts := tree.PrintOptions{
+		ShowAll:           true,   // Show all packages by default
+		MaxDepth:          0,      // No depth limit
+		ShowRelationships: true,   // Show relationship types
+		Format:            "tree", // Use tree format
+	}
+
+	printer := tree.NewPrinter(tw.buf, printOpts)
+	printer.PrintDependencyTree(result.Packages, result.Target)
 }
 
 func summarize(specifiedSeverities []dbTypes.Severity, severityCount map[string]int) (int, []string) {

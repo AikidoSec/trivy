@@ -43,3 +43,6 @@ cmd/trivy/trivy
 
 # RPM
 *.rpm
+
+/clients/*
+/cmd/trivy/*.xml

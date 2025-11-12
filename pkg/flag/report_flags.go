@@ -57,6 +57,12 @@ var (
 		Usage:         "[EXPERIMENTAL] show dependency origin tree of vulnerable packages",
 		TelemetrySafe: true,
 	}
+	AikidoDependencyTreeFlag = Flag[bool]{
+		Name:          "aikido-dependency-tree",
+		ConfigName:    "aikido-dependency-tree",
+		Usage:         "show complete dependency tree for all packages",
+		TelemetrySafe: true,
+	}
 	ListAllPkgsFlag = Flag[bool]{
 		Name:          "list-all-pkgs",
 		ConfigName:    "list-all-pkgs",
@@ -129,58 +135,61 @@ var (
 // ReportFlagGroup composes common printer flag structs
 // used for commands requiring reporting logic.
 type ReportFlagGroup struct {
-	Format          *Flag[string]
-	ReportFormat    *Flag[string]
-	Template        *Flag[string]
-	DependencyTree  *Flag[bool]
-	ListAllPkgs     *Flag[bool]
-	IgnoreFile      *Flag[string]
-	IgnorePolicy    *Flag[string]
-	ExitCode        *Flag[int]
-	ExitOnEOL       *Flag[int]
-	Output          *Flag[string]
-	OutputPluginArg *Flag[string]
-	Severity        *Flag[[]string]
-	Compliance      *Flag[string]
-	ShowSuppressed  *Flag[bool]
-	TableMode       *Flag[[]string]
+	Format               *Flag[string]
+	ReportFormat         *Flag[string]
+	Template             *Flag[string]
+	DependencyTree       *Flag[bool]
+	AikidoDependencyTree *Flag[bool]
+	ListAllPkgs          *Flag[bool]
+	IgnoreFile           *Flag[string]
+	IgnorePolicy         *Flag[string]
+	ExitCode             *Flag[int]
+	ExitOnEOL            *Flag[int]
+	Output               *Flag[string]
+	OutputPluginArg      *Flag[string]
+	Severity             *Flag[[]string]
+	Compliance           *Flag[string]
+	ShowSuppressed       *Flag[bool]
+	TableMode            *Flag[[]string]
 }
 
 type ReportOptions struct {
-	Format           types.Format
-	ReportFormat     string
-	Template         string
-	DependencyTree   bool
-	ListAllPkgs      bool
-	IgnoreFile       string
-	ExitCode         int
-	ExitOnEOL        int
-	IgnorePolicy     string
-	Output           string
-	OutputPluginArgs []string
-	Severities       []dbTypes.Severity
-	Compliance       spec.ComplianceSpec
-	ShowSuppressed   bool
-	TableModes       []types.TableMode
+	Format               types.Format
+	ReportFormat         string
+	Template             string
+	DependencyTree       bool
+	AikidoDependencyTree bool
+	ListAllPkgs          bool
+	IgnoreFile           string
+	ExitCode             int
+	ExitOnEOL            int
+	IgnorePolicy         string
+	Output               string
+	OutputPluginArgs     []string
+	Severities           []dbTypes.Severity
+	Compliance           spec.ComplianceSpec
+	ShowSuppressed       bool
+	TableModes           []types.TableMode
 }
 
 func NewReportFlagGroup() *ReportFlagGroup {
 	return &ReportFlagGroup{
-		Format:          FormatFlag.Clone(),
-		ReportFormat:    ReportFormatFlag.Clone(),
-		Template:        TemplateFlag.Clone(),
-		DependencyTree:  DependencyTreeFlag.Clone(),
-		ListAllPkgs:     ListAllPkgsFlag.Clone(),
-		IgnoreFile:      IgnoreFileFlag.Clone(),
-		IgnorePolicy:    IgnorePolicyFlag.Clone(),
-		ExitCode:        ExitCodeFlag.Clone(),
-		ExitOnEOL:       ExitOnEOLFlag.Clone(),
-		Output:          OutputFlag.Clone(),
-		OutputPluginArg: OutputPluginArgFlag.Clone(),
-		Severity:        SeverityFlag.Clone(),
-		Compliance:      ComplianceFlag.Clone(),
-		ShowSuppressed:  ShowSuppressedFlag.Clone(),
-		TableMode:       TableModeFlag.Clone(),
+		Format:               FormatFlag.Clone(),
+		ReportFormat:         ReportFormatFlag.Clone(),
+		Template:             TemplateFlag.Clone(),
+		DependencyTree:       DependencyTreeFlag.Clone(),
+		AikidoDependencyTree: AikidoDependencyTreeFlag.Clone(),
+		ListAllPkgs:          ListAllPkgsFlag.Clone(),
+		IgnoreFile:           IgnoreFileFlag.Clone(),
+		IgnorePolicy:         IgnorePolicyFlag.Clone(),
+		ExitCode:             ExitCodeFlag.Clone(),
+		ExitOnEOL:            ExitOnEOLFlag.Clone(),
+		Output:               OutputFlag.Clone(),
+		OutputPluginArg:      OutputPluginArgFlag.Clone(),
+		Severity:             SeverityFlag.Clone(),
+		Compliance:           ComplianceFlag.Clone(),
+		ShowSuppressed:       ShowSuppressedFlag.Clone(),
+		TableMode:            TableModeFlag.Clone(),
 	}
 }
 
@@ -194,6 +203,7 @@ func (f *ReportFlagGroup) Flags() []Flagger {
 		f.ReportFormat,
 		f.Template,
 		f.DependencyTree,
+		f.AikidoDependencyTree,
 		f.ListAllPkgs,
 		f.IgnoreFile,
 		f.IgnorePolicy,
@@ -212,6 +222,7 @@ func (f *ReportFlagGroup) ToOptions(opts *Options) error {
 	format := types.Format(f.Format.Value())
 	template := f.Template.Value()
 	dependencyTree := f.DependencyTree.Value()
+	aikidoDependencyTree := f.AikidoDependencyTree.Value()
 	listAllPkgs := f.ListAllPkgs.Value()
 	tableModes := f.TableMode.Value()
 
@@ -243,6 +254,16 @@ func (f *ReportFlagGroup) ToOptions(opts *Options) error {
 		}
 	}
 
+	// "--aikido-dependency-tree" option validation
+	if aikidoDependencyTree {
+		if dependencyTree {
+			log.Warn(`"--aikido-dependency-tree" and "--dependency-tree" cannot be used together. Using "--aikido-dependency-tree".`)
+		}
+		if format != types.FormatTable {
+			log.Warn(`"--aikido-dependency-tree" is most effective with "--format table".`)
+		}
+	}
+
 	// "--table-mode" option is available only with "--format table".
 	if viper.IsSet(TableModeFlag.ConfigName) && format != types.FormatTable {
 		return xerrors.New(`"--table-mode" can be used only with "--format table".`)
@@ -266,21 +287,22 @@ func (f *ReportFlagGroup) ToOptions(opts *Options) error {
 	}
 
 	opts.ReportOptions = ReportOptions{
-		Format:           format,
-		ReportFormat:     f.ReportFormat.Value(),
-		Template:         template,
-		DependencyTree:   dependencyTree,
-		ListAllPkgs:      listAllPkgs,
-		IgnoreFile:       f.IgnoreFile.Value(),
-		ExitCode:         f.ExitCode.Value(),
-		ExitOnEOL:        f.ExitOnEOL.Value(),
-		IgnorePolicy:     f.IgnorePolicy.Value(),
-		Output:           f.Output.Value(),
-		OutputPluginArgs: outputPluginArgs,
-		Severities:       toSeverity(f.Severity.Value()),
-		Compliance:       cs,
-		ShowSuppressed:   f.ShowSuppressed.Value(),
-		TableModes:       xstrings.ToTSlice[types.TableMode](tableModes),
+		Format:               format,
+		ReportFormat:         f.ReportFormat.Value(),
+		Template:             template,
+		DependencyTree:       dependencyTree,
+		AikidoDependencyTree: aikidoDependencyTree,
+		ListAllPkgs:          listAllPkgs,
+		IgnoreFile:           f.IgnoreFile.Value(),
+		ExitCode:             f.ExitCode.Value(),
+		ExitOnEOL:            f.ExitOnEOL.Value(),
+		IgnorePolicy:         f.IgnorePolicy.Value(),
+		Output:               f.Output.Value(),
+		OutputPluginArgs:     outputPluginArgs,
+		Severities:           toSeverity(f.Severity.Value()),
+		Compliance:           cs,
+		ShowSuppressed:       f.ShowSuppressed.Value(),
+		TableModes:           xstrings.ToTSlice[types.TableMode](tableModes),
 	}
 	return nil
 }
