@@ -198,11 +198,12 @@ func Test_effectiveRepositories(t *testing.T) {
 			},
 			wantRepositories: []repository{
 				{
-					ID:        "central",
-					Name:      "Maven Central Repository",
-					URL:       "https://repo.maven.apache.org/maven2/",
-					Releases:  repositoryPolicy{Enabled: "true"},
-					Snapshots: repositoryPolicy{Enabled: "false"},
+					ID:       "central",
+					Name:     "Maven Central Repository",
+					URL:      "https://repo.maven.apache.org/maven2/",
+					Releases: repositoryPolicy{Enabled: "true"},
+					// Snapshots is not set, so it defaults to empty string
+					Snapshots: repositoryPolicy{Enabled: ""},
 				},
 			},
 		},
