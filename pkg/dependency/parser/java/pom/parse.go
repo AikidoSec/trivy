@@ -148,6 +148,7 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string]) ([]ftypes
 		rootDepManagement []pomDependency
 		uniqArtifacts     = make(map[string]artifact)
 		uniqDeps          = make(map[string][]string)
+		relocations       = make(map[string]string)
 	)
 
 	// Iterate direct and transitive dependencies
@@ -225,20 +226,41 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string]) ([]ftypes
 
 		// Offline mode may be missing some fields.
 		if !art.IsEmpty() {
-			// Override the version
-			uniqArtifacts[art.Name()] = artifact{
-				Version:      art.Version,
-				Licenses:     result.artifact.Licenses,
-				Relationship: art.Relationship,
-				Locations:    art.Locations,
+			// Check if this was a relocation (result.artifact has different coordinates than art)
+			// Only use result.artifact if it's valid (non-empty)
+			finalArt := art
+			if !result.artifact.IsEmpty() && result.artifact.Name() != art.Name() {
+				// This was a relocation, use the relocated artifact coordinates
+				finalArt = artifact{
+					GroupID:      result.artifact.GroupID,
+					ArtifactID:   result.artifact.ArtifactID,
+					Version:      result.artifact.Version,
+					Licenses:     result.artifact.Licenses,
+					Relationship: art.Relationship,
+					Locations:    art.Locations,
+				}
+				// Track the relocation mapping
+				relocations[art.Name()] = finalArt.Name()
+			} else {
+				// No relocation or result.artifact is empty, use original with updated licenses
+				finalArt = artifact{
+					GroupID:      art.GroupID,
+					ArtifactID:   art.ArtifactID,
+					Version:      art.Version,
+					Licenses:     result.artifact.Licenses,
+					Relationship: art.Relationship,
+					Locations:    art.Locations,
+				}
 			}
+
+			uniqArtifacts[finalArt.Name()] = finalArt
 
 			// save only dependency names
 			// version will be determined later
 			dependsOn := lo.Map(result.dependencies, func(a artifact, _ int) string {
 				return a.Name()
 			})
-			uniqDeps[packageID(art.Name(), art.Version.String())] = dependsOn
+			uniqDeps[packageID(finalArt.Name(), finalArt.Version.String())] = dependsOn
 		}
 	}
 
@@ -256,7 +278,12 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string]) ([]ftypes
 
 		// Convert dependency names into dependency IDs
 		dependsOn := lo.FilterMap(uniqDeps[pkg.ID], func(dependOnName string, _ int) (string, bool) {
-			ver := depVersion(dependOnName, uniqArtifacts)
+			// Check if this dependency was relocated
+			if newName, relocated := relocations[dependOnName]; relocated {
+				dependOnName = newName
+			}
+
+			ver := depVersion(dependOnName, uniqArtifacts, relocations)
 			return packageID(dependOnName, ver), ver != ""
 		})
 
@@ -282,7 +309,12 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string]) ([]ftypes
 }
 
 // depVersion finds dependency in uniqArtifacts and return its version
-func depVersion(depName string, uniqArtifacts map[string]artifact) string {
+func depVersion(depName string, uniqArtifacts map[string]artifact, relocations map[string]string) string {
+	// Check if this artifact was relocated
+	if newName, relocated := relocations[depName]; relocated {
+		depName = newName
+	}
+
 	if art, ok := uniqArtifacts[depName]; ok {
 		return art.Version.String()
 	}
@@ -330,6 +362,40 @@ func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency) (analy
 	if err != nil {
 		p.logger.Debug("Repository error", log.Err(err))
 	}
+
+	// Handle Maven relocations
+	// If the POM has a relocation, follow it to the new coordinates
+	if pomContent.hasRelocation() {
+		relocGroupID, relocArtifactID, relocVersion := pomContent.relocation()
+		p.logger.Debug("Following relocation",
+			log.String("from", fmt.Sprintf("%s:%s:%s", art.GroupID, art.ArtifactID, art.Version.String())),
+			log.String("to", fmt.Sprintf("%s:%s:%s", relocGroupID, relocArtifactID, relocVersion)))
+
+		// Create a new artifact with the relocated coordinates
+		relocatedArt := artifact{
+			GroupID:      relocGroupID,
+			ArtifactID:   relocArtifactID,
+			Version:      newVersion(relocVersion),
+			Licenses:     art.Licenses,
+			Exclusions:   art.Exclusions,
+			Module:       art.Module,
+			Relationship: art.Relationship,
+			Locations:    art.Locations,
+		}
+
+		// Recursively resolve the relocated artifact
+		// This will also cache the result under the relocated coordinates
+		result, err := p.resolve(relocatedArt, rootDepManagement)
+		if err != nil {
+			return analysisResult{}, xerrors.Errorf("relocation resolve error: %w", err)
+		}
+
+		// Cache the result under the original artifact coordinates too
+		// This ensures that if we encounter the old coordinates again, we get the relocated result
+		p.cache.put(art, result)
+		return result, nil
+	}
+
 	result, err := p.analyze(pomContent, analysisOptions{
 		exclusions:    art.Exclusions,
 		depManagement: rootDepManagement,

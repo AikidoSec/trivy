@@ -2138,6 +2138,52 @@ func TestPom_Parse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:      "relocation",
+			inputFile: filepath.Join("testdata", "relocation", "pom.xml"),
+			local:     true,
+			want: []ftypes.Package{
+				{
+					ID:           "com.example:relocation-test:1.0.0",
+					Name:         "com.example:relocation-test",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipRoot,
+				},
+				{
+					ID:           "org.example:new-artifact:2.0.0",
+					Name:         "org.example:new-artifact",
+					Version:      "2.0.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 12,
+							EndLine:   16,
+						},
+					},
+				},
+				{
+					ID:           "org.example:example-api:2.0.0",
+					Name:         "org.example:example-api",
+					Version:      "2.0.0",
+					Licenses:     []string{"The Apache Software License, Version 2.0"},
+					Relationship: ftypes.RelationshipIndirect,
+				},
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:relocation-test:1.0.0",
+					DependsOn: []string{
+						"org.example:new-artifact:2.0.0",
+					},
+				},
+				{
+					ID: "org.example:new-artifact:2.0.0",
+					DependsOn: []string{
+						"org.example:example-api:2.0.0",
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
