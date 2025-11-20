@@ -116,6 +116,7 @@ func Test_effectiveRepositories(t *testing.T) {
 					Releases: repositoryPolicy{Enabled: "true"},
 					// When a mirror is applied, it enables both releases and snapshots
 					Snapshots: repositoryPolicy{Enabled: "true"},
+					MirrorID:  "mirror-r1-releases",
 				},
 				{
 					ID:        "r2-snapshots",
@@ -158,6 +159,7 @@ func Test_effectiveRepositories(t *testing.T) {
 					URL:       "http://mirror1",
 					Releases:  repositoryPolicy{Enabled: "true"},
 					Snapshots: repositoryPolicy{Enabled: "true"},
+					MirrorID:  "mirror-central",
 				},
 			},
 		},
@@ -179,6 +181,7 @@ func Test_effectiveRepositories(t *testing.T) {
 					URL:       "http://mirror2",
 					Releases:  repositoryPolicy{Enabled: "true"},
 					Snapshots: repositoryPolicy{Enabled: "true"},
+					MirrorID:  "mirror-central",
 				},
 			},
 		},

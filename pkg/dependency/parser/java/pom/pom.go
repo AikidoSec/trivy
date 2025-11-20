@@ -28,6 +28,39 @@ func (p *pom) nil() bool {
 	return p == nil || p.content == nil
 }
 
+func (p *pom) hasRelocation() bool {
+	if p.nil() {
+		return false
+	}
+	reloc := p.content.DistributionManagement.Relocation
+	return reloc.GroupID != "" || reloc.ArtifactID != "" || reloc.Version != ""
+}
+
+func (p *pom) relocation() (groupID, artifactID, version string) {
+	if !p.hasRelocation() {
+		return "", "", ""
+	}
+	reloc := p.content.DistributionManagement.Relocation
+
+	// If relocation fields are empty, use the current artifact's values
+	groupID = reloc.GroupID
+	if groupID == "" {
+		groupID = p.content.GroupId
+	}
+
+	artifactID = reloc.ArtifactID
+	if artifactID == "" {
+		artifactID = p.content.ArtifactId
+	}
+
+	version = reloc.Version
+	if version == "" {
+		version = p.content.Version
+	}
+
+	return groupID, artifactID, version
+}
+
 func (p *pom) inherit(parent *pom) {
 	if parent == nil {
 		return
@@ -245,9 +278,10 @@ type pomXML struct {
 		Text         string          `xml:",chardata"`
 		Dependencies pomDependencies `xml:"dependencies"`
 	} `xml:"dependencyManagement"`
-	Dependencies pomDependencies `xml:"dependencies"`
-	Repositories repositories    `xml:"repositories"`
-	Profiles     []Profile       `xml:"profiles>profile"`
+	Dependencies           pomDependencies           `xml:"dependencies"`
+	Repositories           repositories              `xml:"repositories"`
+	Profiles               []Profile                 `xml:"profiles>profile"`
+	DistributionManagement pomDistributionManagement `xml:"distributionManagement"`
 }
 
 type pomParent struct {
@@ -255,6 +289,18 @@ type pomParent struct {
 	ArtifactId   string `xml:"artifactId"`
 	Version      string `xml:"version"`
 	RelativePath string `xml:"relativePath"`
+}
+
+type pomDistributionManagement struct {
+	Text       string        `xml:",chardata"`
+	Relocation pomRelocation `xml:"relocation"`
+}
+
+type pomRelocation struct {
+	GroupID    string `xml:"groupId"`
+	ArtifactID string `xml:"artifactId"`
+	Version    string `xml:"version"`
+	Message    string `xml:"message"`
 }
 
 type pomLicenses struct {
