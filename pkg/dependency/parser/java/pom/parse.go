@@ -177,7 +177,12 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 			}
 			uniqModules.Append(art.String())
 
-			modulePkgs, moduleDeps, err := p.parseRoot(art, uniqModules, rootDepManagement, rootProperties)
+			// Clear Module flag before recursive call to prevent it from being skipped
+			// The recursive parseRoot will treat this as a workspace root
+			moduleArt := art
+			moduleArt.Module = false
+
+			modulePkgs, moduleDeps, err := p.parseRoot(moduleArt, uniqModules, rootDepManagement, rootProperties)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -211,9 +216,8 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 		if err != nil {
 			return nil, nil, xerrors.Errorf("resolve error (%s): %w", art, err)
 		}
-		// Only log rootDepManagement from the actual root POM
-		// rootDepManagement is now passed as a parameter and never overwritten
-		if art.Relationship == ftypes.RelationshipRoot {
+		// Mark dependencies as "direct" for both root and workspace (module) artifacts
+		if art.Relationship == ftypes.RelationshipRoot || art.Relationship == ftypes.RelationshipWorkspace {
 			// mark its dependencies as "direct"
 			result.dependencies = lo.Map(result.dependencies, func(dep artifact, _ int) artifact {
 				dep.Relationship = ftypes.RelationshipDirect
@@ -350,9 +354,10 @@ func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency, rootPr
 		p.logger.Debug("Repository error", log.Err(err))
 	}
 	result, err := p.analyze(pomContent, analysisOptions{
-		exclusions:     art.Exclusions,
-		depManagement:  rootDepManagement,
-		rootProperties: rootProperties,
+		exclusions:           art.Exclusions,
+		depManagement:        rootDepManagement,
+		rootProperties:       rootProperties,
+		transitiveResolution: true, // This is a transitive dependency
 	})
 	if err != nil {
 		return analysisResult{}, xerrors.Errorf("analyze error: %w", err)
@@ -372,9 +377,10 @@ type analysisResult struct {
 }
 
 type analysisOptions struct {
-	exclusions     set.Set[string]
-	depManagement  []pomDependency   // from the root POM
-	rootProperties map[string]string // properties from the root POM
+	exclusions           set.Set[string]
+	depManagement        []pomDependency   // from the root POM
+	rootProperties       map[string]string // properties from the root POM
+	transitiveResolution bool              // true when resolving transitive dependencies (not the scanned POM)
 }
 
 func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error) {
@@ -482,7 +488,7 @@ func (p *Parser) parseDependencies(deps []pomDependency, props map[string]string
 	var dependencies []artifact
 	for _, d := range deps {
 		// Resolve dependencies
-		d = d.Resolve(props, depManagement, rootDepManagement, rootProps)
+		d = d.Resolve(props, depManagement, rootDepManagement, rootProps, opts.transitiveResolution)
 
 		if (d.Scope != "" && d.Scope != "compile" && d.Scope != "runtime") || d.Optional {
 			continue
@@ -501,8 +507,8 @@ func (p *Parser) resolveDepManagement(props map[string]string, depManagement []p
 		if dep.Scope == "import" {
 			imports = append(imports, dep)
 		} else {
-			// Evaluate variables
-			resolved := dep.Resolve(props, nil, nil, nil)
+			// Evaluate variables (no rootDepManagement for dependencyManagement itself)
+			resolved := dep.Resolve(props, nil, nil, nil, false)
 			newDepManagement = append(newDepManagement, resolved)
 		}
 	}
@@ -521,8 +527,8 @@ func (p *Parser) resolveDepManagement(props map[string]string, depManagement []p
 		newProps := utils.MergeMaps(props, result.properties)
 		result.dependencyManagement = p.resolveDepManagement(newProps, result.dependencyManagement)
 		for k, dd := range result.dependencyManagement {
-			// Evaluate variables and overwrite dependencyManagement
-			result.dependencyManagement[k] = dd.Resolve(newProps, nil, nil, nil)
+			// Evaluate variables and overwrite dependencyManagement (no rootDepManagement for imported POMs)
+			result.dependencyManagement[k] = dd.Resolve(newProps, nil, nil, nil, false)
 		}
 		newDepManagement = p.mergeDependencyManagements(newDepManagement, result.dependencyManagement)
 	}
