@@ -299,7 +299,7 @@ func (d pomDependency) Name() string {
 }
 
 // Resolve evaluates variables in the dependency and inherit some fields from dependencyManagement to the dependency.
-func (d pomDependency) Resolve(props map[string]string, depManagement, rootDepManagement []pomDependency) pomDependency {
+func (d pomDependency) Resolve(props map[string]string, depManagement, rootDepManagement []pomDependency, rootProps map[string]string) pomDependency {
 	// Evaluate variables
 	dep := pomDependency{
 		Text:       d.Text,
@@ -317,11 +317,23 @@ func (d pomDependency) Resolve(props map[string]string, depManagement, rootDepMa
 	// we need to overwrite fields according to the managed dependency.
 	if managed, found := findDep(dep.Name(), rootDepManagement); found { // dependencyManagement from the root POM
 		if managed.Version != "" {
-			dep.Version = evaluateVariable(managed.Version, props, nil)
+			// Use root POM properties to evaluate variables in rootDepManagement
+			var resolvedVersion string
+			if rootProps != nil {
+				resolvedVersion = evaluateVariable(managed.Version, rootProps, nil)
+			} else {
+				resolvedVersion = evaluateVariable(managed.Version, props, nil)
+			}
+			dep.Version = resolvedVersion
 		}
 
 		if managed.Scope != "" {
-			dep.Scope = evaluateVariable(managed.Scope, props, nil)
+			// Use root POM properties to evaluate variables in rootDepManagement
+			if rootProps != nil {
+				dep.Scope = evaluateVariable(managed.Scope, rootProps, nil)
+			} else {
+				dep.Scope = evaluateVariable(managed.Scope, props, nil)
+			}
 		}
 
 		if managed.Optional {
