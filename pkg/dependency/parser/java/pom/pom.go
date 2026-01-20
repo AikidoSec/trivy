@@ -299,7 +299,7 @@ func (d pomDependency) Name() string {
 }
 
 // Resolve evaluates variables in the dependency and inherit some fields from dependencyManagement to the dependency.
-func (d pomDependency) Resolve(props map[string]string, depManagement, rootDepManagement []pomDependency, rootProps map[string]string) pomDependency {
+func (d pomDependency) Resolve(props map[string]string, depManagement, rootDepManagement []pomDependency, rootProps map[string]string, transitiveResolution bool) pomDependency {
 	// Evaluate variables
 	dep := pomDependency{
 		Text:       d.Text,
@@ -313,10 +313,13 @@ func (d pomDependency) Resolve(props map[string]string, depManagement, rootDepMa
 		EndLine:    d.EndLine,
 	}
 
-	// If this dependency is managed in the root POM,
-	// we need to overwrite fields according to the managed dependency.
+	// If this dependency is managed in the root POM:
+	// - For transitive dependencies (transitiveResolution=true): always override version/scope
+	// - For direct/inherited dependencies (transitiveResolution=false): only fill if empty
+	// This matches Maven's dependencyManagement behavior.
 	if managed, found := findDep(dep.Name(), rootDepManagement); found { // dependencyManagement from the root POM
-		if managed.Version != "" {
+		// For transitive dependencies, always override. For direct dependencies, only fill if empty.
+		if managed.Version != "" && (transitiveResolution || dep.Version == "") {
 			// Use root POM properties to evaluate variables in rootDepManagement
 			var resolvedVersion string
 			if rootProps != nil {
@@ -327,7 +330,7 @@ func (d pomDependency) Resolve(props map[string]string, depManagement, rootDepMa
 			dep.Version = resolvedVersion
 		}
 
-		if managed.Scope != "" {
+		if managed.Scope != "" && (transitiveResolution || dep.Scope == "") {
 			// Use root POM properties to evaluate variables in rootDepManagement
 			if rootProps != nil {
 				dep.Scope = evaluateVariable(managed.Scope, rootProps, nil)
@@ -340,7 +343,8 @@ func (d pomDependency) Resolve(props map[string]string, depManagement, rootDepMa
 			dep.Optional = managed.Optional
 		}
 		if len(managed.Exclusions.Exclusion) != 0 {
-			dep.Exclusions = managed.Exclusions
+			// Merge exclusions rather than overwriting
+			dep.Exclusions.Exclusion = append(dep.Exclusions.Exclusion, managed.Exclusions.Exclusion...)
 		}
 		return dep
 	}
