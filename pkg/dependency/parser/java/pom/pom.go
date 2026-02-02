@@ -20,8 +20,9 @@ import (
 )
 
 type pom struct {
-	filePath string
-	content  *pomXML
+	filePath       string
+	content        *pomXML
+	gradleMetadata *gradleModuleMetadata // Gradle Module Metadata if available
 }
 
 func (p *pom) nil() bool {
@@ -122,6 +123,27 @@ func (p *pom) licenses() []string {
 	return slices.ZeroToNil(lo.FilterMap(p.content.Licenses.License, func(lic pomLicense, _ int) (string, bool) {
 		return lic.Name, lic.Name != ""
 	}))
+}
+
+// hasRelocation returns true if this POM has a relocation directive
+func (p *pom) hasRelocation() bool {
+	if p == nil || p.content == nil {
+		return false
+	}
+	return p.content.DistributionManagement.Relocation.GroupID != "" &&
+		p.content.DistributionManagement.Relocation.ArtifactID != ""
+}
+
+// relocation returns the new coordinates for a relocated artifact
+// Maven artifact relocation: https://maven.apache.org/guides/mini/guide-relocation.html
+func (p *pom) relocation() (groupID, artifactID, version string) {
+	rel := p.content.DistributionManagement.Relocation
+	// If version is not specified in relocation, use the original version
+	newVersion := rel.Version
+	if newVersion == "" {
+		newVersion = p.content.Version
+	}
+	return rel.GroupID, rel.ArtifactID, newVersion
 }
 
 func getRepositoryPolicy(enabledString string, props map[string]string) bool {
@@ -245,9 +267,21 @@ type pomXML struct {
 		Text         string          `xml:",chardata"`
 		Dependencies pomDependencies `xml:"dependencies"`
 	} `xml:"dependencyManagement"`
-	Dependencies pomDependencies `xml:"dependencies"`
-	Repositories repositories    `xml:"repositories"`
-	Profiles     []Profile       `xml:"profiles>profile"`
+	Dependencies         pomDependencies         `xml:"dependencies"`
+	Repositories         repositories            `xml:"repositories"`
+	Profiles             []Profile               `xml:"profiles>profile"`
+	DistributionManagement pomDistributionManagement `xml:"distributionManagement"`
+}
+
+type pomDistributionManagement struct {
+	Relocation pomRelocation `xml:"relocation"`
+}
+
+type pomRelocation struct {
+	GroupID    string `xml:"groupId"`
+	ArtifactID string `xml:"artifactId"`
+	Version    string `xml:"version"`
+	Message    string `xml:"message"`
 }
 
 type pomParent struct {

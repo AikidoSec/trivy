@@ -2138,6 +2138,43 @@ func TestPom_Parse(t *testing.T) {
 				},
 			},
 		},
+		// Maven artifact relocation: old artifacts with <distributionManagement><relocation>
+		// should be automatically redirected to the new artifact coordinates.
+		// Ref: https://maven.apache.org/guides/mini/guide-relocation.html
+		{
+			name:      "artifact relocation",
+			inputFile: filepath.Join("testdata", "artifact-relocation", "pom.xml"),
+			local:     true,
+			want: []ftypes.Package{
+				{
+					ID:           "com.example:app-with-relocated-dep:1.0.0",
+					Name:         "com.example:app-with-relocated-dep",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipRoot,
+				},
+				// Should resolve to new coordinates, not old ones
+				{
+					ID:           "com.mysql:mysql-connector-j:8.0.32",
+					Name:         "com.mysql:mysql-connector-j",
+					Version:      "8.0.32",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 13,
+							EndLine:   17,
+						},
+					},
+				},
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:app-with-relocated-dep:1.0.0",
+					DependsOn: []string{
+						"com.mysql:mysql-connector-j:8.0.32",
+					},
+				},
+			},
+		},
 		// Regression test: root POM's dependencyManagement with property variable
 		// should override transitive dependencies even when they have explicit versions.
 		// This ensures rootDepManagement uses root's properties to evaluate variables.
