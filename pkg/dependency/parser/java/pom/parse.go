@@ -1,7 +1,6 @@
 package pom
 
 import (
-	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -129,6 +128,11 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 	// Register repositories from root POM BEFORE resolving dependencyManagement
 	// This ensures BOM imports can be fetched from these repositories (e.g., GCS buckets)
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := root.repositories(p.settings)
+
+	// Add GCP authentication headers to GCP repositories
+	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
+	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
+
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
 	})
@@ -489,6 +493,10 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 	}
 	// Update remoteRepositories
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := pom.repositories(p.settings)
+
+	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
+	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
+
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
 	})
@@ -935,20 +943,52 @@ func (p *Parser) fetchPOMFromRemoteRepositories(paths []string, snapshot bool) (
 	return nil, xerrors.Errorf("the POM was not found in remote remoteRepositories")
 }
 
-func (p *Parser) remoteRepoRequest(repo RemoteRepositoryConfig, paths []string) (*http.Request, error) {
-	// Convert GCS URLs (gcs://) to HTTPS format
-	repoURLStr := repo.URL
+// addGCPAuthToRepos adds GCP authentication headers to GCP repositories.
+// GCS URLs (gcs://) are converted to HTTPS, and Authorization headers are added once.
+// This is called during repository registration, not on every request.
+func addGCPAuthToRepos(repos []RemoteRepositoryConfig) []RemoteRepositoryConfig {
+	logger := log.WithPrefix("pom")
+
+	result := make([]RemoteRepositoryConfig, 0, len(repos))
+	for _, repo := range repos {
+		newRepo := repo
+
+	// Convert GCS URLs to HTTPS
 	if gcpauth.IsGCSBucket(repo.URL) {
-		p.logger.Debug("Converting GCS URL to HTTPS", log.String("original", repo.URL))
-		convertedURL, err := gcpauth.ConvertGCSToHTTPS(repo.URL)
+		httpsURL, err := gcpauth.ConvertGCSToHTTPS(repo.URL)
 		if err != nil {
-			return nil, xerrors.Errorf("unable to convert GCS URL: %w", err)
+			logger.Debug("Failed to convert GCS URL", log.String("url", repo.URL), log.Err(err))
+			result = append(result, repo)
+			continue
 		}
-		repoURLStr = convertedURL
-		p.logger.Debug("GCS URL converted", log.String("https_url", convertedURL))
+		newRepo.URL = httpsURL
+	}
+	
+	// Add GCP authentication headers (after URL conversion if needed)
+	if gcpauth.IsGCPRepository(newRepo.URL) {
+		headerName, headerValue, err := gcpauth.GetAuthorizationHeader()
+		if err != nil {
+			logger.Debug("Failed to get GCP auth header", log.String("repo", newRepo.URL), log.Err(err))
+			// Continue without auth - might still work for public repos
+		} else if headerName != "" && headerValue != "" {
+			newRepo.HTTPHeaders = append(newRepo.HTTPHeaders, struct {
+				Name  string
+				Value string
+			}{
+				Name:  headerName,
+				Value: headerValue,
+			})
+			logger.Debug("Added GCP authentication to repository", log.String("repo", newRepo.URL))
+		}
 	}
 
-	repoURL, err := url.Parse(repoURLStr)
+		result = append(result, newRepo)
+	}
+	return result
+}
+
+func (p *Parser) remoteRepoRequest(repo RemoteRepositoryConfig, paths []string) (*http.Request, error) {
+	repoURL, err := url.Parse(repo.URL)
 	if err != nil {
 		return nil, xerrors.Errorf("unable to parse URL: %w", err)
 	}
@@ -961,23 +1001,11 @@ func (p *Parser) remoteRepoRequest(repo RemoteRepositoryConfig, paths []string) 
 		return nil, xerrors.Errorf("unable to create HTTP request: %w", err)
 	}
 
-	// Add GCP authentication if this is a GCP repository (GCS or Artifact Registry)
-	if gcpauth.IsGCPRepository(repo.URL) && gcpauth.IsGCPAuthEnabled() {
-		p.logger.Debug("Attempting to add GCP authentication", log.String("repo", repo.URL))
-		token, err := gcpauth.GetGCPAccessToken(context.Background())
-		if err != nil {
-			p.logger.Debug("Failed to get GCP access token", log.Err(err))
-			// Continue without auth - might still work for public repos
-		} else {
-			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-			p.logger.Debug("Added GCP Bearer token to request", log.String("url", repoURL.String()))
-		}
-	}
-
 	// Standard authentication
 	if repo.Username != "" && repo.Password != "" {
 		req.SetBasicAuth(repo.Username, repo.Password)
 	}
+
 	for _, header := range repo.HTTPHeaders {
 		req.Header.Add(header.Name, header.Value)
 	}
@@ -992,17 +1020,9 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo RemoteRepositoryConfig, 
 		return "", nil
 	}
 
-	isGCS := gcpauth.IsGCSBucket(repo.URL)
-
 	// Overwrite pom file name to `maven-metadata.xml`
 	mavenMetadataPaths := slices.Clone(paths[:len(paths)-1]) // Clone slice to avoid shadow overwriting last element of `paths`
 	mavenMetadataPaths = append(mavenMetadataPaths, "maven-metadata.xml")
-
-	if isGCS {
-		p.logger.Debug("Fetching maven-metadata.xml from GCS",
-			log.String("repo", repo.URL),
-			log.String("path", strings.Join(mavenMetadataPaths, "/")))
-	}
 
 	req, err := p.remoteRepoRequest(repo, mavenMetadataPaths)
 	if err != nil {
@@ -1013,18 +1033,10 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo RemoteRepositoryConfig, 
 	client := xhttp.Client()
 	resp, err := client.Do(req)
 	if err != nil {
-		if isGCS {
-			p.logger.Debug("Failed to fetch maven-metadata.xml from GCS", log.String("url", req.URL.String()), log.Err(err))
-		} else {
-			p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Err(err))
-		}
+		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Err(err))
 		return "", nil
 	} else if resp.StatusCode != http.StatusOK {
-		if isGCS {
-			p.logger.Debug("Failed to fetch maven-metadata.xml from GCS", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
-		} else {
-			p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
-		}
+		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
 		return "", nil
 	}
 	defer resp.Body.Close()
@@ -1039,19 +1051,7 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo RemoteRepositoryConfig, 
 		if sv.Extension == "pom" {
 			// mavenMetadataPaths[len(mavenMetadataPaths)-3] is always artifactID
 			pomFileName = fmt.Sprintf("%s-%s.pom", mavenMetadataPaths[len(mavenMetadataPaths)-3], sv.Value)
-			if isGCS {
-				p.logger.Debug("Found POM filename in GCS maven-metadata.xml",
-					log.String("url", req.URL.String()),
-					log.String("pom_filename", pomFileName),
-					log.String("snapshot_value", sv.Value))
-			}
 		}
-	}
-
-	if isGCS && pomFileName == "" {
-		p.logger.Debug("No POM filename found in GCS maven-metadata.xml",
-			log.String("url", req.URL.String()),
-			log.Int("snapshotVersions_count", len(mavenMetadata.Versioning.SnapshotVersions)))
 	}
 
 	return pomFileName, nil
@@ -1073,13 +1073,6 @@ func (p *Parser) fetchGradleModuleMetadata(repo RemoteRepositoryConfig, pomPaths
 	} else {
 		// If it doesn't end with .pom, can't determine .module name
 		return nil
-	}
-
-	isGCS := gcpauth.IsGCSBucket(repo.URL)
-	if isGCS {
-		p.logger.Debug("Attempting to fetch Gradle module metadata from GCS",
-			log.String("repo", repo.URL),
-			log.String("path", strings.Join(modulePaths, "/")))
 	}
 
 	req, err := p.remoteRepoRequest(repo, modulePaths)
@@ -1127,13 +1120,6 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo RemoteRepositoryConfig, paths
 		return nil, nil
 	}
 
-	isGCS := gcpauth.IsGCSBucket(repo.URL)
-	if isGCS {
-		p.logger.Debug("Fetching POM from GCS bucket",
-			log.String("repo", repo.URL),
-			log.String("path", strings.Join(paths, "/")))
-	}
-
 	req, err := p.remoteRepoRequest(repo, paths)
 	if err != nil {
 		p.logger.Debug("Unable to create request", log.String("repo", repo.URL), log.Err(err))
@@ -1143,52 +1129,23 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo RemoteRepositoryConfig, paths
 	client := xhttp.Client()
 	resp, err := client.Do(req)
 	if err != nil {
-		if isGCS {
-			p.logger.Debug("Failed to fetch from GCS", log.String("url", req.URL.String()), log.Err(err))
-		} else {
-			p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Err(err))
-		}
+		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Err(err))
 		return nil, nil
 	} else if resp.StatusCode != http.StatusOK {
-		if isGCS {
-			p.logger.Debug("Failed to fetch from GCS", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
-		} else {
-			p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
-		}
+		p.logger.Debug("Failed to fetch", log.String("url", req.URL.String()), log.Int("statusCode", resp.StatusCode))
 		return nil, nil
 	}
 	defer resp.Body.Close()
 
-	// Read the entire body - needed for Gradle metadata marker detection and GCS debugging
+	// Read the entire body - needed for Gradle metadata marker detection
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, xerrors.Errorf("failed to read POM response: %w", err)
 	}
 
-	if isGCS {
-		p.logger.Debug("Successfully fetched POM from GCS",
-			log.String("url", req.URL.String()),
-			log.Int("size_bytes", len(bodyBytes)))
-	}
-
 	content, err := parsePom(strings.NewReader(string(bodyBytes)), false)
 	if err != nil {
-		if isGCS && len(bodyBytes) > 0 {
-			p.logger.Debug("Failed to parse GCS POM",
-				log.String("url", req.URL.String()),
-				log.Err(err))
-		}
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
-	}
-
-	if isGCS {
-		p.logger.Debug("Successfully parsed GCS POM",
-			log.String("url", req.URL.String()),
-			log.String("groupId", content.GroupId),
-			log.String("artifactId", content.ArtifactId),
-			log.String("version", content.Version),
-			log.Int("dependencies_count", len(content.Dependencies.Dependency)),
-			log.Int("depManagement_count", len(content.DependencyManagement.Dependencies.Dependency)))
 	}
 
 	// Check if this POM has Gradle Module Metadata

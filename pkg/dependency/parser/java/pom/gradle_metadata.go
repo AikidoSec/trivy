@@ -8,7 +8,7 @@ import (
 )
 
 // Gradle Module Metadata structures
-// Reference: https://github.com/gradle/gradle/blob/master/subprojects/docs/src/docs/design/gradle-module-metadata-latest-specification.md
+// Reference: https://github.com/gradle/gradle/blob/master/platforms/documentation/docs/src/docs/design/gradle-module-metadata-latest-specification.md
 
 type gradleModuleMetadata struct {
 	FormatVersion string                `json:"formatVersion"`
