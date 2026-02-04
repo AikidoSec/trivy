@@ -124,10 +124,25 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 		return nil, nil, xerrors.Errorf("pom resolve error: %w", err)
 	}
 
+	// Register repositories from root POM BEFORE resolving dependencyManagement
+	// This ensures BOM imports can be fetched from these repositories (e.g., GCS buckets)
+	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := root.repositories(p.settings)
+
+	// Add GCP authentication headers to GCP repositories
+	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
+
+	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
+		return repo.URL
+	})
+	p.snapshotRemoteRepos = lo.UniqBy(append(pomSnapshotRemoteRepos, p.snapshotRemoteRepos...), func(repo RemoteRepositoryConfig) string {
+		return repo.URL
+	})
+
 	rootProperties := root.properties()
 	rootDepManagementRaw := root.content.DependencyManagement.Dependencies.Dependency
 
 	// Resolve root dependencyManagement BEFORE any dependencies are cached
+	// Now BOM imports can be fetched from registered repositories
 	rootDepManagement := p.resolveDepManagement(rootProperties, rootDepManagementRaw)
 
 	// Now analyze root POM with the correct rootDepManagement
@@ -353,6 +368,7 @@ func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency, rootPr
 	if err != nil {
 		p.logger.Debug("Repository error", log.Err(err))
 	}
+
 	result, err := p.analyze(pomContent, analysisOptions{
 		exclusions:           art.Exclusions,
 		depManagement:        rootDepManagement,
@@ -391,7 +407,12 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 		opts.exclusions = set.New[string]()
 	}
 	// Update remoteRepositories
+
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := pom.repositories(p.settings)
+
+	// Add GCP authentication headers to GCP repositories
+	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
+
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
 	})
@@ -786,9 +807,12 @@ func (p *Parser) remoteRepoRequest(repo RemoteRepositoryConfig, paths []string) 
 	if err != nil {
 		return nil, xerrors.Errorf("unable to create HTTP request: %w", err)
 	}
+
+	// Standard authentication
 	if repo.Username != "" && repo.Password != "" {
 		req.SetBasicAuth(repo.Username, repo.Password)
 	}
+
 	for _, header := range repo.HTTPHeaders {
 		req.Header.Add(header.Name, header.Value)
 	}
