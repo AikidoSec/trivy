@@ -1,11 +1,10 @@
-package gcpauth
+package pom
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -14,14 +13,12 @@ import (
 )
 
 const (
-	cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
+	cloudPlatformScope     = "https://www.googleapis.com/auth/cloud-platform"
+	authorizationHeaderKey = "Authorization"
 )
 
-var (
-	// Global token cache - generated once and auto-refreshes when expired
-	cachedToken *oauth2.Token
-	tokenMu     sync.RWMutex
-)
+// Global token cache - generated once and auto-refreshes when expired
+var cachedToken *oauth2.Token
 
 // IsGCPArtifactRegistry checks if URL is GCP Artifact Registry
 func IsGCPArtifactRegistry(url string) bool {
@@ -39,7 +36,6 @@ func IsGCPRepository(url string) bool {
 }
 
 // ConvertGCSToHTTPS converts gcs:// URLs to HTTPS format for HTTP requests
-// Example: gcs://repo.revolut.com/snapshots -> https://storage.googleapis.com/repo.revolut.com/snapshots
 func ConvertGCSToHTTPS(gcsURL string) (string, error) {
 	if !strings.HasPrefix(gcsURL, "gcs://") {
 		return gcsURL, nil // Not a GCS URL, return as-is
@@ -58,33 +54,19 @@ func ConvertGCSToHTTPS(gcsURL string) (string, error) {
 
 // GetAuthorizationHeader returns the Authorization header name and value for GCP repositories.
 // The oauth2.Token is cached globally and auto-refreshes when expired.
-// Thread-safe - can be called concurrently from multiple goroutines.
 // Returns empty strings if GOOGLE_APPLICATION_CREDENTIALS is not set or if token generation fails.
 func GetAuthorizationHeader() (name, value string, err error) {
 	logger := log.WithPrefix("gcp-auth")
+
+	if cachedToken != nil && cachedToken.Valid() {
+		headerValue := fmt.Sprintf("Bearer %s", cachedToken.AccessToken)
+		return authorizationHeaderKey, headerValue, nil
+	}
 
 	// Check if GCP auth is enabled
 	credPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	if credPath == "" {
 		return "", "", nil
-	}
-
-	// Check if we have a valid cached token
-	tokenMu.RLock()
-	if cachedToken != nil && cachedToken.Valid() {
-		headerValue := fmt.Sprintf("Bearer %s", cachedToken.AccessToken)
-		tokenMu.RUnlock()
-		return "Authorization", headerValue, nil
-	}
-	tokenMu.RUnlock()
-
-	// Need to generate a new token
-	tokenMu.Lock()
-	defer tokenMu.Unlock()
-
-	// Double-check after acquiring write lock (another goroutine might have generated it)
-	if cachedToken != nil && cachedToken.Valid() {
-		return "Authorization", fmt.Sprintf("Bearer %s", cachedToken.AccessToken), nil
 	}
 
 	logger.Debug("Generating GCP access token", log.String("credentials_file", credPath))
@@ -109,5 +91,49 @@ func GetAuthorizationHeader() (name, value string, err error) {
 	cachedToken = token
 	logger.Info("GCP access token generated successfully")
 
-	return "Authorization", fmt.Sprintf("Bearer %s", token.AccessToken), nil
+	return authorizationHeaderKey, fmt.Sprintf("Bearer %s", token.AccessToken), nil
+}
+
+// addGCPAuthToRepos adds GCP authentication headers to GCP repositories.
+// GCS URLs (gcs://) are converted to HTTPS, and Authorization headers are added once.
+// This is called during repository registration, not on every request.
+func addGCPAuthToRepos(repos []RemoteRepositoryConfig) []RemoteRepositoryConfig {
+	logger := log.WithPrefix("pom")
+
+	result := make([]RemoteRepositoryConfig, 0, len(repos))
+	for _, repo := range repos {
+		newRepo := repo
+
+		// Convert GCS URLs to HTTPS
+		if IsGCSBucket(repo.URL) {
+			httpsURL, err := ConvertGCSToHTTPS(repo.URL)
+			if err != nil {
+				logger.Debug("Failed to convert GCS URL", log.String("url", repo.URL), log.Err(err))
+				result = append(result, repo)
+				continue
+			}
+			newRepo.URL = httpsURL
+		}
+
+		// Add GCP authentication headers (after URL conversion if needed)
+		if IsGCPRepository(newRepo.URL) {
+			headerName, headerValue, err := GetAuthorizationHeader()
+			if err != nil {
+				logger.Debug("Failed to get GCP auth header", log.String("repo", newRepo.URL), log.Err(err))
+				// Continue without auth - might still work for public repos
+			} else if headerName != "" && headerValue != "" {
+				newRepo.HTTPHeaders = append(newRepo.HTTPHeaders, struct {
+					Name  string
+					Value string
+				}{
+					Name:  headerName,
+					Value: headerValue,
+				})
+				logger.Debug("Added GCP authentication to repository", log.String("repo", newRepo.URL))
+			}
+		}
+
+		result = append(result, newRepo)
+	}
+	return result
 }

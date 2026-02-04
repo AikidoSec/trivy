@@ -132,7 +132,10 @@ require (
 	modernc.org/sqlite v1.38.0
 )
 
-require github.com/rogpeppe/go-internal v1.14.1
+require (
+	github.com/rogpeppe/go-internal v1.14.1
+	golang.org/x/oauth2 v0.30.0
+)
 
 require (
 	buf.build/gen/go/bufbuild/bufplugin/protocolbuffers/go v1.36.6-20250121211742-6d880cc6cc8d.1 // indirect
@@ -451,7 +454,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.3 // indirect
 	golang.org/x/exp v0.0.0-20250606033433-dcc06ee1d476 // indirect
-	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/telemetry v0.0.0-20250417124945-06ef541f3fa3 // indirect
 	golang.org/x/time v0.12.0 // indirect

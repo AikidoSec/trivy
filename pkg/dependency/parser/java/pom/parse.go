@@ -20,7 +20,6 @@ import (
 	"golang.org/x/xerrors"
 
 	"github.com/aquasecurity/trivy/pkg/dependency"
-	"github.com/aquasecurity/trivy/pkg/dependency/parser/java/pom/gcpauth"
 	"github.com/aquasecurity/trivy/pkg/dependency/parser/utils"
 	ftypes "github.com/aquasecurity/trivy/pkg/fanal/types"
 	"github.com/aquasecurity/trivy/pkg/log"
@@ -131,7 +130,6 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 
 	// Add GCP authentication headers to GCP repositories
 	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
-	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
 
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
@@ -179,7 +177,6 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 		deps          ftypes.Dependencies
 		uniqArtifacts = make(map[string]artifact)
 		uniqDeps      = make(map[string][]string)
-		relocations   = make(map[string]string) // maps old name -> new name for relocated artifacts
 	)
 
 	// Iterate direct and transitive dependencies
@@ -259,32 +256,14 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 		// Resolve transitive dependencies later
 		queue.enqueue(result.dependencies...)
 
-		// Use the resolved artifact (which may have been relocated)
-		resolvedArt := result.artifact
-		if resolvedArt.IsEmpty() {
-			resolvedArt = art // fallback to original if resolved is empty
-		}
-
-		// Track relocation if artifact name changed
-		if art.Name() != resolvedArt.Name() {
-			relocations[art.Name()] = resolvedArt.Name()
-		}
-
-		// Determine the artifact name to use (relocated if applicable)
-		artifactName := art.Name()
-		if _, relocated := relocations[art.Name()]; relocated {
-			artifactName = resolvedArt.Name()
-		}
-
 		// Offline mode may be missing some fields.
 		if !art.IsEmpty() {
 			// Override the version
-			// Use art.Version (from dependencyManagement) not resolvedArt.Version (from POM)
-			uniqArtifacts[artifactName] = artifact{
+			uniqArtifacts[art.Name()] = artifact{
 				Version:      art.Version,
-				Licenses:     resolvedArt.Licenses,
-				Relationship: art.Relationship, // Keep original relationship
-				Locations:    art.Locations,    // Keep original locations from POM
+				Licenses:     result.artifact.Licenses,
+				Relationship: art.Relationship,
+				Locations:    art.Locations,
 			}
 
 			// save only dependency names
@@ -292,21 +271,7 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 			dependsOn := lo.Map(result.dependencies, func(a artifact, _ int) string {
 				return a.Name()
 			})
-			uniqDeps[packageID(artifactName, art.Version.String())] = dependsOn
-		}
-	}
-
-	// Apply relocations to dependency mappings
-	// If any dependencies were relocated, update all references to use the new names
-	if len(relocations) > 0 {
-		for pkgID, dependsOn := range uniqDeps {
-			updatedDeps := lo.Map(dependsOn, func(depName string, _ int) string {
-				if newName, relocated := relocations[depName]; relocated {
-					return newName
-				}
-				return depName
-			})
-			uniqDeps[pkgID] = updatedDeps
+			uniqDeps[packageID(art.Name(), art.Version.String())] = dependsOn
 		}
 	}
 
@@ -404,55 +369,6 @@ func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency, rootPr
 		p.logger.Debug("Repository error", log.Err(err))
 	}
 
-	// Check for Maven artifact relocation
-	// Ref: https://maven.apache.org/guides/mini/guide-relocation.html
-	if pomContent != nil && pomContent.hasRelocation() {
-		newGroupID, newArtifactID, relocatedVersion := pomContent.relocation()
-
-		// When an artifact is relocated, Maven treats it as if you had declared the new artifact
-		// from the start. Check if we've already resolved the NEW artifact with a different version.
-		newArtifactName := fmt.Sprintf("%s:%s", newGroupID, newArtifactID)
-
-		// Check the cache for any version of the relocated artifact
-		// This handles the case where the relocated artifact is declared directly elsewhere
-		// with a different version (e.g., mysql:mysql-connector-java:8.0.32 → com.mysql:mysql-connector-j
-		// but com.mysql:mysql-connector-j:8.3.0 is also declared directly)
-		cacheKey := artifact{GroupID: newGroupID, ArtifactID: newArtifactID}
-		if cachedResult := p.cache.getByName(cacheKey.Name()); cachedResult != nil {
-			p.logger.Debug("Artifact relocated - using cached version",
-				log.String("old", fmt.Sprintf("%s:%s:%s", art.GroupID, art.ArtifactID, art.Version.String())),
-				log.String("new", fmt.Sprintf("%s:%s:%s", cachedResult.artifact.GroupID, cachedResult.artifact.ArtifactID, cachedResult.artifact.Version.String())),
-				log.String("source", "cache"))
-			return *cachedResult, nil
-		}
-
-		// Check if there's a managed version for the NEW artifact name
-		managedVersion := relocatedVersion // default to relocation version
-		if managed, found := findDep(newArtifactName, rootDepManagement); found && managed.Version != "" {
-			// Evaluate variables in the managed version using root properties
-			managedVersion = evaluateVariable(managed.Version, rootProperties, nil)
-			p.logger.Debug("Artifact relocated with managed version",
-				log.String("old", fmt.Sprintf("%s:%s:%s", art.GroupID, art.ArtifactID, art.Version.String())),
-				log.String("new", fmt.Sprintf("%s:%s:%s", newGroupID, newArtifactID, managedVersion)),
-				log.String("managed_from", "rootDepManagement"))
-		} else {
-			p.logger.Debug("Artifact relocated",
-				log.String("old", fmt.Sprintf("%s:%s:%s", art.GroupID, art.ArtifactID, art.Version.String())),
-				log.String("new", fmt.Sprintf("%s:%s:%s", newGroupID, newArtifactID, relocatedVersion)))
-		}
-
-		// Follow the relocation to the new artifact with the determined version
-		relocatedArt := artifact{
-			GroupID:      newGroupID,
-			ArtifactID:   newArtifactID,
-			Version:      newVersion(managedVersion),
-			Exclusions:   art.Exclusions,
-			Locations:    art.Locations,
-			Relationship: art.Relationship,
-		}
-		return p.resolve(relocatedArt, rootDepManagement, rootProperties)
-	}
-
 	result, err := p.analyze(pomContent, analysisOptions{
 		exclusions:           art.Exclusions,
 		depManagement:        rootDepManagement,
@@ -474,7 +390,6 @@ type analysisResult struct {
 	dependencyManagement []pomDependency // Keep the order of dependencies in 'dependencyManagement'
 	properties           map[string]string
 	modules              []string
-	gradleMetadata       *gradleModuleMetadata // Gradle Module Metadata if available
 }
 
 type analysisOptions struct {
@@ -491,11 +406,11 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 	if opts.exclusions == nil {
 		opts.exclusions = set.New[string]()
 	}
-	// Update remoteRepositories
+
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := pom.repositories(p.settings)
 
+	// Add GCP authentication headers to GCP repositories
 	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
-	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
 
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
@@ -522,7 +437,6 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 		dependencyManagement: depManagement,
 		properties:           props,
 		modules:              pom.content.Modules.Module,
-		gradleMetadata:       pom.gradleMetadata,
 	}, nil
 }
 
@@ -606,67 +520,6 @@ func (p *Parser) parseDependencies(deps []pomDependency, props map[string]string
 	return dependencies
 }
 
-// applyGradleMetadataToDepManagement applies Gradle Module Metadata to resolve version ranges.
-//
-// PRECEDENCE: Gradle Module Metadata has HIGHEST priority over version range parsing.
-// - If .module file exists: use "prefers" field as the concrete version
-// - If no .module file: fall back to version range parsing logic (extractVersionFromRange)
-//
-// This follows Gradle's standard behavior where .module files provide authoritative metadata.
-func (p *Parser) applyGradleMetadataToDepManagement(result *analysisResult) {
-	if result.gradleMetadata == nil {
-		return
-	}
-
-	p.logger.Debug("Applying Gradle Module Metadata to resolve version ranges",
-		log.String("artifact", result.artifact.Name()))
-
-	for i, dep := range result.dependencyManagement {
-		// Check if this dependency has a version range (contains comma or brackets/parentheses)
-		if dep.Version != "" && isVersionRange(dep.Version) {
-
-			// Look up the preferred version in the Gradle metadata
-			preferredVersion := result.gradleMetadata.getPreferredVersion(dep.GroupID, dep.ArtifactID)
-
-			if preferredVersion != "" {
-				// Check if the preferred version is ALSO a range (yes, this can happen!)
-				// If so, we still need to parse it
-				if isVersionRange(preferredVersion) {
-					p.logger.Debug("Gradle metadata prefers field contains a range, will be parsed later",
-						log.String("groupId", dep.GroupID),
-						log.String("artifactId", dep.ArtifactID),
-						log.String("version_range", dep.Version),
-						log.String("preferred_version", preferredVersion))
-					// Use the preferred range (Gradle's choice over POM's choice)
-					result.dependencyManagement[i].Version = preferredVersion
-				} else {
-					p.logger.Debug("Resolved version range using Gradle metadata",
-						log.String("groupId", dep.GroupID),
-						log.String("artifactId", dep.ArtifactID),
-						log.String("version_range", dep.Version),
-						log.String("preferred_version", preferredVersion))
-					// Use the concrete version from Gradle metadata
-					result.dependencyManagement[i].Version = preferredVersion
-				}
-			} else {
-				p.logger.Debug("No preferred version found in Gradle metadata",
-					log.String("groupId", dep.GroupID),
-					log.String("artifactId", dep.ArtifactID),
-					log.String("version_range", dep.Version))
-			}
-		}
-	}
-}
-
-// isVersionRange checks if a version string is a range (contains range indicators)
-func isVersionRange(version string) bool {
-	return strings.Contains(version, ",") ||
-		strings.Contains(version, "[") ||
-		strings.Contains(version, "]") ||
-		strings.Contains(version, "(") ||
-		strings.Contains(version, ")")
-}
-
 func (p *Parser) resolveDepManagement(props map[string]string, depManagement []pomDependency) []pomDependency {
 	var newDepManagement, imports []pomDependency
 	for _, dep := range depManagement {
@@ -688,9 +541,6 @@ func (p *Parser) resolveDepManagement(props map[string]string, depManagement []p
 		if err != nil {
 			continue
 		}
-
-		// Apply Gradle Module Metadata if available to resolve version ranges
-		p.applyGradleMetadataToDepManagement(&result)
 
 		// We need to recursively check all nested depManagements,
 		// so that we don't miss dependencies on nested depManagements with `Import` scope.
@@ -943,50 +793,6 @@ func (p *Parser) fetchPOMFromRemoteRepositories(paths []string, snapshot bool) (
 	return nil, xerrors.Errorf("the POM was not found in remote remoteRepositories")
 }
 
-// addGCPAuthToRepos adds GCP authentication headers to GCP repositories.
-// GCS URLs (gcs://) are converted to HTTPS, and Authorization headers are added once.
-// This is called during repository registration, not on every request.
-func addGCPAuthToRepos(repos []RemoteRepositoryConfig) []RemoteRepositoryConfig {
-	logger := log.WithPrefix("pom")
-
-	result := make([]RemoteRepositoryConfig, 0, len(repos))
-	for _, repo := range repos {
-		newRepo := repo
-
-	// Convert GCS URLs to HTTPS
-	if gcpauth.IsGCSBucket(repo.URL) {
-		httpsURL, err := gcpauth.ConvertGCSToHTTPS(repo.URL)
-		if err != nil {
-			logger.Debug("Failed to convert GCS URL", log.String("url", repo.URL), log.Err(err))
-			result = append(result, repo)
-			continue
-		}
-		newRepo.URL = httpsURL
-	}
-	
-	// Add GCP authentication headers (after URL conversion if needed)
-	if gcpauth.IsGCPRepository(newRepo.URL) {
-		headerName, headerValue, err := gcpauth.GetAuthorizationHeader()
-		if err != nil {
-			logger.Debug("Failed to get GCP auth header", log.String("repo", newRepo.URL), log.Err(err))
-			// Continue without auth - might still work for public repos
-		} else if headerName != "" && headerValue != "" {
-			newRepo.HTTPHeaders = append(newRepo.HTTPHeaders, struct {
-				Name  string
-				Value string
-			}{
-				Name:  headerName,
-				Value: headerValue,
-			})
-			logger.Debug("Added GCP authentication to repository", log.String("repo", newRepo.URL))
-		}
-	}
-
-		result = append(result, newRepo)
-	}
-	return result
-}
-
 func (p *Parser) remoteRepoRequest(repo RemoteRepositoryConfig, paths []string) (*http.Request, error) {
 	repoURL, err := url.Parse(repo.URL)
 	if err != nil {
@@ -1057,63 +863,6 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo RemoteRepositoryConfig, 
 	return pomFileName, nil
 }
 
-// fetchGradleModuleMetadata fetches the Gradle Module Metadata (.module file) for a given artifact
-func (p *Parser) fetchGradleModuleMetadata(repo RemoteRepositoryConfig, pomPaths []string) *gradleModuleMetadata {
-	// Replace .pom with .module in the last path element
-	if len(pomPaths) == 0 {
-		return nil
-	}
-
-	modulePaths := make([]string, len(pomPaths))
-	copy(modulePaths, pomPaths)
-
-	lastIdx := len(modulePaths) - 1
-	if strings.HasSuffix(modulePaths[lastIdx], ".pom") {
-		modulePaths[lastIdx] = strings.TrimSuffix(modulePaths[lastIdx], ".pom") + ".module"
-	} else {
-		// If it doesn't end with .pom, can't determine .module name
-		return nil
-	}
-
-	req, err := p.remoteRepoRequest(repo, modulePaths)
-	if err != nil {
-		p.logger.Debug("Unable to create request for .module file", log.Err(err))
-		return nil
-	}
-
-	client := xhttp.Client()
-	resp, err := client.Do(req)
-	if err != nil {
-		p.logger.Debug("Failed to fetch .module file", log.String("url", req.URL.String()), log.Err(err))
-		return nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		p.logger.Debug("Failed to fetch .module file",
-			log.String("url", req.URL.String()),
-			log.Int("statusCode", resp.StatusCode))
-		return nil
-	}
-
-	metadata, err := parseGradleModuleMetadata(resp.Body)
-	if err != nil {
-		p.logger.Debug("Failed to parse Gradle module metadata",
-			log.String("url", req.URL.String()),
-			log.Err(err))
-		return nil
-	}
-
-	p.logger.Debug("Successfully fetched and parsed Gradle module metadata",
-		log.String("url", req.URL.String()),
-		log.String("group", metadata.Component.Group),
-		log.String("module", metadata.Component.Module),
-		log.String("version", metadata.Component.Version),
-		log.Int("variants", len(metadata.Variants)))
-
-	return metadata
-}
-
 func (p *Parser) fetchPOMFromRemoteRepository(repo RemoteRepositoryConfig, paths []string) (*pom, error) {
 	if isObsoleteRepo(repo.URL) {
 		p.logger.Debug("Obsolete remote repository", log.String("repo", repo.URL))
@@ -1137,29 +886,14 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo RemoteRepositoryConfig, paths
 	}
 	defer resp.Body.Close()
 
-	// Read the entire body - needed for Gradle metadata marker detection
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, xerrors.Errorf("failed to read POM response: %w", err)
-	}
-
-	content, err := parsePom(strings.NewReader(string(bodyBytes)), false)
+	content, err := parsePom(resp.Body, false)
 	if err != nil {
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
 	}
 
-	// Check if this POM has Gradle Module Metadata
-	var gradleMeta *gradleModuleMetadata
-	if hasGradleMetadataMarker(bodyBytes) {
-		p.logger.Debug("POM has Gradle metadata marker, attempting to fetch .module file",
-			log.String("url", req.URL.String()))
-		gradleMeta = p.fetchGradleModuleMetadata(repo, paths)
-	}
-
 	return &pom{
-		filePath:       "", // from remote repositories
-		content:        content,
-		gradleMetadata: gradleMeta,
+		filePath: "", // from remote repositories
+		content:  content,
 	}, nil
 }
 
