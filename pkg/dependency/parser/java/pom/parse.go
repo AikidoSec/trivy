@@ -406,6 +406,7 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 	if opts.exclusions == nil {
 		opts.exclusions = set.New[string]()
 	}
+	// Update remoteRepositories
 
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := pom.repositories(p.settings)
 
