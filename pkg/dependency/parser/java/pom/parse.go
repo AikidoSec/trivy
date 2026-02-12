@@ -20,7 +20,6 @@ import (
 	"golang.org/x/xerrors"
 
 	"github.com/aquasecurity/trivy/pkg/dependency"
-	"github.com/aquasecurity/trivy/pkg/dependency/parser/java/pom/gcpauth"
 	"github.com/aquasecurity/trivy/pkg/dependency/parser/utils"
 	ftypes "github.com/aquasecurity/trivy/pkg/fanal/types"
 	"github.com/aquasecurity/trivy/pkg/log"
@@ -126,12 +125,8 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 	}
 
 	// Register repositories from root POM BEFORE resolving dependencyManagement
-	// This ensures BOM imports can be fetched from these repositories (e.g., GCS buckets)
+	// This ensures BOM imports can be fetched from these repositories
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := root.repositories(p.settings)
-
-	// Add GCP authentication headers to GCP repositories
-	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
-	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
 
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
@@ -179,7 +174,6 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 		deps          ftypes.Dependencies
 		uniqArtifacts = make(map[string]artifact)
 		uniqDeps      = make(map[string][]string)
-		relocations   = make(map[string]string) // maps old name -> new name for relocated artifacts
 	)
 
 	// Iterate direct and transitive dependencies
@@ -265,22 +259,11 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 			resolvedArt = art // fallback to original if resolved is empty
 		}
 
-		// Track relocation if artifact name changed
-		if art.Name() != resolvedArt.Name() {
-			relocations[art.Name()] = resolvedArt.Name()
-		}
-
-		// Determine the artifact name to use (relocated if applicable)
-		artifactName := art.Name()
-		if _, relocated := relocations[art.Name()]; relocated {
-			artifactName = resolvedArt.Name()
-		}
-
 		// Offline mode may be missing some fields.
 		if !art.IsEmpty() {
 			// Override the version
 			// Use art.Version (from dependencyManagement) not resolvedArt.Version (from POM)
-			uniqArtifacts[artifactName] = artifact{
+			uniqArtifacts[art.Name()] = artifact{
 				Version:      art.Version,
 				Licenses:     resolvedArt.Licenses,
 				Relationship: art.Relationship, // Keep original relationship
@@ -292,21 +275,7 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 			dependsOn := lo.Map(result.dependencies, func(a artifact, _ int) string {
 				return a.Name()
 			})
-			uniqDeps[packageID(artifactName, art.Version.String())] = dependsOn
-		}
-	}
-
-	// Apply relocations to dependency mappings
-	// If any dependencies were relocated, update all references to use the new names
-	if len(relocations) > 0 {
-		for pkgID, dependsOn := range uniqDeps {
-			updatedDeps := lo.Map(dependsOn, func(depName string, _ int) string {
-				if newName, relocated := relocations[depName]; relocated {
-					return newName
-				}
-				return depName
-			})
-			uniqDeps[pkgID] = updatedDeps
+			uniqDeps[packageID(art.Name(), art.Version.String())] = dependsOn
 		}
 	}
 
@@ -404,55 +373,6 @@ func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency, rootPr
 		p.logger.Debug("Repository error", log.Err(err))
 	}
 
-	// Check for Maven artifact relocation
-	// Ref: https://maven.apache.org/guides/mini/guide-relocation.html
-	if pomContent != nil && pomContent.hasRelocation() {
-		newGroupID, newArtifactID, relocatedVersion := pomContent.relocation()
-
-		// When an artifact is relocated, Maven treats it as if you had declared the new artifact
-		// from the start. Check if we've already resolved the NEW artifact with a different version.
-		newArtifactName := fmt.Sprintf("%s:%s", newGroupID, newArtifactID)
-
-		// Check the cache for any version of the relocated artifact
-		// This handles the case where the relocated artifact is declared directly elsewhere
-		// with a different version (e.g., mysql:mysql-connector-java:8.0.32 → com.mysql:mysql-connector-j
-		// but com.mysql:mysql-connector-j:8.3.0 is also declared directly)
-		cacheKey := artifact{GroupID: newGroupID, ArtifactID: newArtifactID}
-		if cachedResult := p.cache.getByName(cacheKey.Name()); cachedResult != nil {
-			p.logger.Debug("Artifact relocated - using cached version",
-				log.String("old", fmt.Sprintf("%s:%s:%s", art.GroupID, art.ArtifactID, art.Version.String())),
-				log.String("new", fmt.Sprintf("%s:%s:%s", cachedResult.artifact.GroupID, cachedResult.artifact.ArtifactID, cachedResult.artifact.Version.String())),
-				log.String("source", "cache"))
-			return *cachedResult, nil
-		}
-
-		// Check if there's a managed version for the NEW artifact name
-		managedVersion := relocatedVersion // default to relocation version
-		if managed, found := findDep(newArtifactName, rootDepManagement); found && managed.Version != "" {
-			// Evaluate variables in the managed version using root properties
-			managedVersion = evaluateVariable(managed.Version, rootProperties, nil)
-			p.logger.Debug("Artifact relocated with managed version",
-				log.String("old", fmt.Sprintf("%s:%s:%s", art.GroupID, art.ArtifactID, art.Version.String())),
-				log.String("new", fmt.Sprintf("%s:%s:%s", newGroupID, newArtifactID, managedVersion)),
-				log.String("managed_from", "rootDepManagement"))
-		} else {
-			p.logger.Debug("Artifact relocated",
-				log.String("old", fmt.Sprintf("%s:%s:%s", art.GroupID, art.ArtifactID, art.Version.String())),
-				log.String("new", fmt.Sprintf("%s:%s:%s", newGroupID, newArtifactID, relocatedVersion)))
-		}
-
-		// Follow the relocation to the new artifact with the determined version
-		relocatedArt := artifact{
-			GroupID:      newGroupID,
-			ArtifactID:   newArtifactID,
-			Version:      newVersion(managedVersion),
-			Exclusions:   art.Exclusions,
-			Locations:    art.Locations,
-			Relationship: art.Relationship,
-		}
-		return p.resolve(relocatedArt, rootDepManagement, rootProperties)
-	}
-
 	result, err := p.analyze(pomContent, analysisOptions{
 		exclusions:           art.Exclusions,
 		depManagement:        rootDepManagement,
@@ -493,9 +413,6 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 	}
 	// Update remoteRepositories
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := pom.repositories(p.settings)
-
-	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
-	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
 
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
@@ -941,50 +858,6 @@ func (p *Parser) fetchPOMFromRemoteRepositories(paths []string, snapshot bool) (
 		return fetched, nil
 	}
 	return nil, xerrors.Errorf("the POM was not found in remote remoteRepositories")
-}
-
-// addGCPAuthToRepos adds GCP authentication headers to GCP repositories.
-// GCS URLs (gcs://) are converted to HTTPS, and Authorization headers are added once.
-// This is called during repository registration, not on every request.
-func addGCPAuthToRepos(repos []RemoteRepositoryConfig) []RemoteRepositoryConfig {
-	logger := log.WithPrefix("pom")
-
-	result := make([]RemoteRepositoryConfig, 0, len(repos))
-	for _, repo := range repos {
-		newRepo := repo
-
-	// Convert GCS URLs to HTTPS
-	if gcpauth.IsGCSBucket(repo.URL) {
-		httpsURL, err := gcpauth.ConvertGCSToHTTPS(repo.URL)
-		if err != nil {
-			logger.Debug("Failed to convert GCS URL", log.String("url", repo.URL), log.Err(err))
-			result = append(result, repo)
-			continue
-		}
-		newRepo.URL = httpsURL
-	}
-	
-	// Add GCP authentication headers (after URL conversion if needed)
-	if gcpauth.IsGCPRepository(newRepo.URL) {
-		headerName, headerValue, err := gcpauth.GetAuthorizationHeader()
-		if err != nil {
-			logger.Debug("Failed to get GCP auth header", log.String("repo", newRepo.URL), log.Err(err))
-			// Continue without auth - might still work for public repos
-		} else if headerName != "" && headerValue != "" {
-			newRepo.HTTPHeaders = append(newRepo.HTTPHeaders, struct {
-				Name  string
-				Value string
-			}{
-				Name:  headerName,
-				Value: headerValue,
-			})
-			logger.Debug("Added GCP authentication to repository", log.String("repo", newRepo.URL))
-		}
-	}
-
-		result = append(result, newRepo)
-	}
-	return result
 }
 
 func (p *Parser) remoteRepoRequest(repo RemoteRepositoryConfig, paths []string) (*http.Request, error) {
