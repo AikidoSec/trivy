@@ -162,6 +162,7 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 		deps          ftypes.Dependencies
 		uniqArtifacts = make(map[string]artifact)
 		uniqDeps      = make(map[string][]string)
+		relocations   = make(map[string]string) // maps old name -> new name for relocated artifacts
 	)
 
 	// Iterate direct and transitive dependencies
@@ -241,14 +242,32 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 		// Resolve transitive dependencies later
 		queue.enqueue(result.dependencies...)
 
+		// Use the resolved artifact (which may have been relocated)
+		resolvedArt := result.artifact
+		if resolvedArt.IsEmpty() {
+			resolvedArt = art // fallback to original if resolved is empty
+		}
+
+		// Track relocation if artifact name changed
+		if art.Name() != resolvedArt.Name() {
+			relocations[art.Name()] = resolvedArt.Name()
+		}
+
+		// Determine the artifact name to use (relocated if applicable)
+		artifactName := art.Name()
+		if _, relocated := relocations[art.Name()]; relocated {
+			artifactName = resolvedArt.Name()
+		}
+
 		// Offline mode may be missing some fields.
 		if !art.IsEmpty() {
 			// Override the version
-			uniqArtifacts[art.Name()] = artifact{
+			// Use art.Version (from dependencyManagement) not resolvedArt.Version (from POM)
+			uniqArtifacts[artifactName] = artifact{
 				Version:      art.Version,
-				Licenses:     result.artifact.Licenses,
-				Relationship: art.Relationship,
-				Locations:    art.Locations,
+				Licenses:     resolvedArt.Licenses,
+				Relationship: art.Relationship, // Keep original relationship
+				Locations:    art.Locations,    // Keep original locations from POM
 			}
 
 			// save only dependency names
@@ -256,7 +275,21 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 			dependsOn := lo.Map(result.dependencies, func(a artifact, _ int) string {
 				return a.Name()
 			})
-			uniqDeps[packageID(art.Name(), art.Version.String())] = dependsOn
+			uniqDeps[packageID(artifactName, art.Version.String())] = dependsOn
+		}
+	}
+
+	// Apply relocations to dependency mappings
+	// If any dependencies were relocated, update all references to use the new names
+	if len(relocations) > 0 {
+		for pkgID, dependsOn := range uniqDeps {
+			updatedDeps := lo.Map(dependsOn, func(depName string, _ int) string {
+				if newName, relocated := relocations[depName]; relocated {
+					return newName
+				}
+				return depName
+			})
+			uniqDeps[pkgID] = updatedDeps
 		}
 	}
 
@@ -353,6 +386,51 @@ func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency, rootPr
 	if err != nil {
 		p.logger.Debug("Repository error", log.Err(err))
 	}
+
+	// Check for Maven artifact relocation
+	// Ref: https://maven.apache.org/guides/mini/guide-relocation.html
+	if pomContent != nil && pomContent.hasRelocation() {
+		newGroupID, newArtifactID, relocatedVersion := pomContent.relocation()
+
+		// When an artifact is relocated, Maven treats it as if you had declared the new artifact
+		// from the start. Check if we've already resolved the NEW artifact with a different version.
+		newArtifactName := fmt.Sprintf("%s:%s", newGroupID, newArtifactID)
+
+		// TEMPORARY WORKAROUND: Check if ANY version of the relocated artifact is already cached.
+		//
+		// This prevents duplicate artifacts when:
+		// 1. POM declares: mysql:mysql-connector-java:8.0.32 (OLD, relocates to com.mysql:mysql-connector-j)
+		// 2. POM also declares: com.mysql:mysql-connector-j:8.3.0 (NEW, directly)
+		//
+		// Without this check, we'd end up with both 8.0.32 and 8.3.0 in the dependency tree.
+		//
+		// We will implement Maven's "nearest wins" algorithm soon, so this workaround
+		// can be removed because version conflicts will be resolved correctly during normal
+		// dependency resolution, making this relocation-specific check unnecessary.
+		cacheKey := artifact{GroupID: newGroupID, ArtifactID: newArtifactID}
+		if cachedResult := p.cache.getByName(cacheKey.Name()); cachedResult != nil {
+			return *cachedResult, nil
+		}
+
+		// Check if there's a managed version for the NEW artifact name
+		managedVersion := relocatedVersion // default to relocation version
+		if managed, found := findDep(newArtifactName, rootDepManagement); found && managed.Version != "" {
+			// Evaluate variables in the managed version using root properties
+			managedVersion = evaluateVariable(managed.Version, rootProperties, nil)
+		}
+
+		// Follow the relocation to the new artifact with the determined version
+		relocatedArt := artifact{
+			GroupID:      newGroupID,
+			ArtifactID:   newArtifactID,
+			Version:      newVersion(managedVersion),
+			Exclusions:   art.Exclusions,
+			Locations:    art.Locations,
+			Relationship: art.Relationship,
+		}
+		return p.resolve(relocatedArt, rootDepManagement, rootProperties)
+	}
+
 	result, err := p.analyze(pomContent, analysisOptions{
 		exclusions:           art.Exclusions,
 		depManagement:        rootDepManagement,

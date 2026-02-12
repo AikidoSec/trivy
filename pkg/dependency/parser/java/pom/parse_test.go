@@ -2188,6 +2188,46 @@ func TestPom_Parse(t *testing.T) {
 				},
 			},
 		},
+		// Maven artifact relocation: old artifacts with <distributionManagement><relocation>
+		// should be automatically redirected to the new artifact coordinates.
+		// Ref: https://maven.apache.org/guides/mini/guide-relocation.html
+		//
+		// This test declares: mysql:mysql-connector-java:8.0.32 (OLD artifact)
+		// But expects result: com.mysql:mysql-connector-j:8.0.32 (NEW artifact)
+		{
+			name:      "artifact relocation",
+			inputFile: filepath.Join("testdata", "artifact-relocation", "pom.xml"),
+			local:     true,
+			want: []ftypes.Package{
+				{
+					ID:           "com.example:app-with-relocated-dep:1.0.0",
+					Name:         "com.example:app-with-relocated-dep",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipRoot,
+				},
+				// POM declares mysql:mysql-connector-java but should resolve to com.mysql:mysql-connector-j
+				{
+					ID:           "com.mysql:mysql-connector-j:8.0.32",
+					Name:         "com.mysql:mysql-connector-j",
+					Version:      "8.0.32",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 13, // Location of mysql:mysql-connector-java in source POM
+							EndLine:   17,
+						},
+					},
+				},
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:app-with-relocated-dep:1.0.0",
+					DependsOn: []string{
+						"com.mysql:mysql-connector-j:8.0.32", // Relocated artifact name
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
