@@ -1,6 +1,7 @@
 package pom
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 
@@ -42,9 +43,10 @@ type gradleModuleDependencyConstraint struct {
 }
 
 type gradleModuleVersionSpec struct {
-	Strictly string `json:"strictly,omitempty"` // Hard requirement
-	Requires string `json:"requires,omitempty"` // Minimum version or range
-	Prefers  string `json:"prefers,omitempty"`  // Preferred version
+	Strictly string   `json:"strictly,omitempty"` // Hard requirement (highest priority)
+	Requires string   `json:"requires,omitempty"` // Minimum version or range
+	Prefers  string   `json:"prefers,omitempty"`  // Preferred version (lowest priority)
+	Rejects  []string `json:"rejects,omitempty"`  // Rejected versions
 }
 
 // parseGradleModuleMetadata parses a Gradle Module Metadata JSON file
@@ -57,20 +59,23 @@ func parseGradleModuleMetadata(r io.Reader) (*gradleModuleMetadata, error) {
 	return &metadata, nil
 }
 
-// getPreferredVersion extracts the preferred version for a given dependency
-// from the Gradle Module Metadata. Returns empty string if not found.
+// getPreferredVersion extracts the version for a given dependency from the Gradle Module Metadata.
+// It respects Gradle's version constraint priority: strictly > requires > prefers.
+// Returns empty string if not found.
 func (m *gradleModuleMetadata) getPreferredVersion(groupID, artifactID string) string {
 	for _, variant := range m.Variants {
 		// Check dependencyConstraints (used in BOMs/platforms)
 		for _, constraint := range variant.DependencyConstraints {
 			if constraint.Group == groupID && constraint.Module == artifactID {
-				// Prefer the "prefers" field if available
-				if constraint.Version.Prefers != "" {
-					return constraint.Version.Prefers
+				// Priority order: strictly (hard requirement) > requires > prefers
+				if constraint.Version.Strictly != "" {
+					return constraint.Version.Strictly
 				}
-				// Fall back to "requires" if no "prefers"
 				if constraint.Version.Requires != "" {
 					return constraint.Version.Requires
+				}
+				if constraint.Version.Prefers != "" {
+					return constraint.Version.Prefers
 				}
 			}
 		}
@@ -78,11 +83,15 @@ func (m *gradleModuleMetadata) getPreferredVersion(groupID, artifactID string) s
 		// Check dependencies (used in regular modules)
 		for _, dep := range variant.Dependencies {
 			if dep.Group == groupID && dep.Module == artifactID {
-				if dep.Version.Prefers != "" {
-					return dep.Version.Prefers
+				// Priority order: strictly > requires > prefers
+				if dep.Version.Strictly != "" {
+					return dep.Version.Strictly
 				}
 				if dep.Version.Requires != "" {
 					return dep.Version.Requires
+				}
+				if dep.Version.Prefers != "" {
+					return dep.Version.Prefers
 				}
 			}
 		}
@@ -99,30 +108,5 @@ func (m *gradleModuleMetadata) getPreferredVersion(groupID, artifactID string) s
 // The marker format is: <!-- do_not_remove: published-with-gradle-metadata -->
 func hasGradleMetadataMarker(pomContent []byte) bool {
 	// Look for the marker: <!-- do_not_remove: published-with-gradle-metadata -->
-	marker := []byte("published-with-gradle-metadata")
-	return len(pomContent) > 0 && containsBytes(pomContent, marker)
-}
-
-func containsBytes(haystack, needle []byte) bool {
-	if len(needle) == 0 {
-		return false
-	}
-	for i := 0; i <= len(haystack)-len(needle); i++ {
-		if matchBytes(haystack[i:i+len(needle)], needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return bytes.Contains(pomContent, []byte("published-with-gradle-metadata"))
 }

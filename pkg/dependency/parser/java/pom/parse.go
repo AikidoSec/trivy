@@ -124,22 +124,10 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 		return nil, nil, xerrors.Errorf("pom resolve error: %w", err)
 	}
 
-	// Register repositories from root POM BEFORE resolving dependencyManagement
-	// This ensures BOM imports can be fetched from these repositories
-	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := root.repositories(p.settings)
-
-	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
-		return repo.URL
-	})
-	p.snapshotRemoteRepos = lo.UniqBy(append(pomSnapshotRemoteRepos, p.snapshotRemoteRepos...), func(repo RemoteRepositoryConfig) string {
-		return repo.URL
-	})
-
 	rootProperties := root.properties()
 	rootDepManagementRaw := root.content.DependencyManagement.Dependencies.Dependency
 
 	// Resolve root dependencyManagement BEFORE any dependencies are cached
-	// Now BOM imports can be fetched from registered repositories
 	rootDepManagement := p.resolveDepManagement(rootProperties, rootDepManagementRaw)
 
 	// Now analyze root POM with the correct rootDepManagement
@@ -253,21 +241,14 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 		// Resolve transitive dependencies later
 		queue.enqueue(result.dependencies...)
 
-		// Use the resolved artifact (which may have been relocated)
-		resolvedArt := result.artifact
-		if resolvedArt.IsEmpty() {
-			resolvedArt = art // fallback to original if resolved is empty
-		}
-
 		// Offline mode may be missing some fields.
 		if !art.IsEmpty() {
 			// Override the version
 			// Use art.Version (from dependencyManagement) not resolvedArt.Version (from POM)
 			uniqArtifacts[art.Name()] = artifact{
-				Version:      art.Version,
-				Licenses:     resolvedArt.Licenses,
-				Relationship: art.Relationship, // Keep original relationship
-				Locations:    art.Locations,    // Keep original locations from POM
+				Licenses:     result.artifact.Licenses,
+				Relationship: art.Relationship,
+				Locations:    art.Locations,
 			}
 
 			// save only dependency names
@@ -372,7 +353,6 @@ func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency, rootPr
 	if err != nil {
 		p.logger.Debug("Repository error", log.Err(err))
 	}
-
 	result, err := p.analyze(pomContent, analysisOptions{
 		exclusions:           art.Exclusions,
 		depManagement:        rootDepManagement,
@@ -413,7 +393,6 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 	}
 	// Update remoteRepositories
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := pom.repositories(p.settings)
-
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
 	})
@@ -534,10 +513,6 @@ func (p *Parser) applyGradleMetadataToDepManagement(result *analysisResult) {
 	if result.gradleMetadata == nil {
 		return
 	}
-
-	p.logger.Debug("Applying Gradle Module Metadata to resolve version ranges",
-		log.String("artifact", result.artifact.Name()))
-
 	for i, dep := range result.dependencyManagement {
 		// Check if this dependency has a version range (contains comma or brackets/parentheses)
 		if dep.Version != "" && isVersionRange(dep.Version) {
@@ -549,27 +524,12 @@ func (p *Parser) applyGradleMetadataToDepManagement(result *analysisResult) {
 				// Check if the preferred version is ALSO a range (yes, this can happen!)
 				// If so, we still need to parse it
 				if isVersionRange(preferredVersion) {
-					p.logger.Debug("Gradle metadata prefers field contains a range, will be parsed later",
-						log.String("groupId", dep.GroupID),
-						log.String("artifactId", dep.ArtifactID),
-						log.String("version_range", dep.Version),
-						log.String("preferred_version", preferredVersion))
 					// Use the preferred range (Gradle's choice over POM's choice)
 					result.dependencyManagement[i].Version = preferredVersion
 				} else {
-					p.logger.Debug("Resolved version range using Gradle metadata",
-						log.String("groupId", dep.GroupID),
-						log.String("artifactId", dep.ArtifactID),
-						log.String("version_range", dep.Version),
-						log.String("preferred_version", preferredVersion))
 					// Use the concrete version from Gradle metadata
 					result.dependencyManagement[i].Version = preferredVersion
 				}
-			} else {
-				p.logger.Debug("No preferred version found in Gradle metadata",
-					log.String("groupId", dep.GroupID),
-					log.String("artifactId", dep.ArtifactID),
-					log.String("version_range", dep.Version))
 			}
 		}
 	}
@@ -950,30 +910,22 @@ func (p *Parser) fetchGradleModuleMetadata(repo RemoteRepositoryConfig, pomPaths
 
 	req, err := p.remoteRepoRequest(repo, modulePaths)
 	if err != nil {
-		p.logger.Debug("Unable to create request for .module file", log.Err(err))
 		return nil
 	}
 
 	client := xhttp.Client()
 	resp, err := client.Do(req)
 	if err != nil {
-		p.logger.Debug("Failed to fetch .module file", log.String("url", req.URL.String()), log.Err(err))
 		return nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		p.logger.Debug("Failed to fetch .module file",
-			log.String("url", req.URL.String()),
-			log.Int("statusCode", resp.StatusCode))
 		return nil
 	}
 
 	metadata, err := parseGradleModuleMetadata(resp.Body)
 	if err != nil {
-		p.logger.Debug("Failed to parse Gradle module metadata",
-			log.String("url", req.URL.String()),
-			log.Err(err))
 		return nil
 	}
 

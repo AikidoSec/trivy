@@ -125,7 +125,6 @@ func (p *pom) licenses() []string {
 	}))
 }
 
-
 func getRepositoryPolicy(enabledString string, props map[string]string) bool {
 	if enabledString == "" {
 		return true
@@ -247,9 +246,9 @@ type pomXML struct {
 		Text         string          `xml:",chardata"`
 		Dependencies pomDependencies `xml:"dependencies"`
 	} `xml:"dependencyManagement"`
-	Dependencies         pomDependencies         `xml:"dependencies"`
-	Repositories         repositories            `xml:"repositories"`
-	Profiles             []Profile               `xml:"profiles>profile"`
+	Dependencies pomDependencies `xml:"dependencies"`
+	Repositories repositories    `xml:"repositories"`
+	Profiles     []Profile       `xml:"profiles>profile"`
 }
 
 type pomParent struct {

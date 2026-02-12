@@ -155,7 +155,7 @@ func TestGradleModuleMetadata_GetPreferredVersion(t *testing.T) {
 		wantVersion   string
 	}{
 		{
-			name: "find preferred version in dependencyConstraints",
+			name: "strictly has highest priority",
 			metadata: &gradleModuleMetadata{
 				Variants: []gradleModuleVariant{
 					{
@@ -175,10 +175,10 @@ func TestGradleModuleMetadata_GetPreferredVersion(t *testing.T) {
 			},
 			groupID:     "com.example.services",
 			artifactID:  "service-api",
-			wantVersion: "1.5-SNAPSHOT",
+			wantVersion: "[1.4-SNAPSHOT, 1.5-SNAPSHOT]", // strictly wins
 		},
 		{
-			name: "find preferred version in dependencies",
+			name: "requires has priority over prefers",
 			metadata: &gradleModuleMetadata{
 				Variants: []gradleModuleVariant{
 					{
@@ -197,10 +197,10 @@ func TestGradleModuleMetadata_GetPreferredVersion(t *testing.T) {
 			},
 			groupID:     "org.springframework",
 			artifactID:  "spring-core",
-			wantVersion: "5.3.10",
+			wantVersion: "5.3.0", // requires wins over prefers
 		},
 		{
-			name: "fallback to requires when no prefers",
+			name: "uses prefers when only prefers is specified",
 			metadata: &gradleModuleMetadata{
 				Variants: []gradleModuleVariant{
 					{
@@ -209,7 +209,7 @@ func TestGradleModuleMetadata_GetPreferredVersion(t *testing.T) {
 								Group:  "com.example",
 								Module: "example-lib",
 								Version: gradleModuleVersionSpec{
-									Requires: "2.0.0",
+									Prefers: "2.0.0",
 								},
 							},
 						},
@@ -219,6 +219,27 @@ func TestGradleModuleMetadata_GetPreferredVersion(t *testing.T) {
 			groupID:     "com.example",
 			artifactID:  "example-lib",
 			wantVersion: "2.0.0",
+		},
+		{
+			name: "uses requires when only requires is specified",
+			metadata: &gradleModuleMetadata{
+				Variants: []gradleModuleVariant{
+					{
+						DependencyConstraints: []gradleModuleDependencyConstraint{
+							{
+								Group:  "com.example",
+								Module: "example-lib",
+								Version: gradleModuleVersionSpec{
+									Requires: "3.0.0",
+								},
+							},
+						},
+					},
+				},
+			},
+			groupID:     "com.example",
+			artifactID:  "example-lib",
+			wantVersion: "3.0.0",
 		},
 		{
 			name: "not found returns empty string",
