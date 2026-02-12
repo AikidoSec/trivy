@@ -244,7 +244,6 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 		// Offline mode may be missing some fields.
 		if !art.IsEmpty() {
 			// Override the version
-			// Use art.Version (from dependencyManagement) not resolvedArt.Version (from POM)
 			uniqArtifacts[art.Name()] = artifact{
 				Version:      art.Version,
 				Licenses:     result.artifact.Licenses,
