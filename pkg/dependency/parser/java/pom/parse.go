@@ -246,6 +246,7 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepMa
 			// Override the version
 			// Use art.Version (from dependencyManagement) not resolvedArt.Version (from POM)
 			uniqArtifacts[art.Name()] = artifact{
+				Version:      art.Version,
 				Licenses:     result.artifact.Licenses,
 				Relationship: art.Relationship,
 				Locations:    art.Locations,
@@ -968,7 +969,7 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo RemoteRepositoryConfig, paths
 		return nil, xerrors.Errorf("failed to read POM response: %w", err)
 	}
 
-	content, err := parsePom(strings.NewReader(string(bodyBytes)), false)
+	content, err := parsePom(resp.Body, false)
 	if err != nil {
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
 	}
