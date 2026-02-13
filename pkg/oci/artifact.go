@@ -252,7 +252,7 @@ func (a Artifacts) Download(ctx context.Context, dst string, opt DownloadOption)
 func shouldTryOtherRepo(err error) bool {
 	var terr *transport.Error
 	if !errors.As(err, &terr) {
-		return false
+		return true // If we fail to fetch the Aikido Container Registry -> always try the next repository
 	}
 
 	for _, diagnostic := range terr.Errors {
@@ -278,5 +278,5 @@ func shouldTryOtherRepo(err error) bool {
 		}
 	}
 
-	return false
+	return true // If we fail to fetch the Aikido Container Registry -> always try the next repository
 }
