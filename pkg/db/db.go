@@ -83,8 +83,7 @@ func NewClient(dbDir string, quiet bool, opts ...Option) *Client {
 	o := &options{
 		dbRepositories: []name.Reference{
 			defaultAikidoECRRepository,
-			defaultGCRRepository,
-			defaultGHCRRepository,
+			defaultAikidoECRRepository,
 		},
 	}
 
