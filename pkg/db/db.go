@@ -27,7 +27,7 @@ const (
 
 var (
 	// Aikido Elastic Container Registry
-	DefaultAikidoECRRepository = fmt.Sprintf("%s:%d", "public.ecr.aws/r4t1l2k7/aikido-security/trivy-db", db.SchemaVersion)
+	DefaultAikidoECRRepository = fmt.Sprintf("%s:%s", "public.ecr.aws/aikido/aikido-security/trivy-db", "latest")
 	defaultAikidoECRRepository = lo.Must(name.NewTag(DefaultAikidoECRRepository))
 
 	// GitHub Container Registry
