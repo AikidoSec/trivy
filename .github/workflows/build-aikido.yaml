@@ -59,7 +59,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           version: v2.1.0
-          args: build --snapshot --clean -f=goreleaser-aikido.yml
+          args: release --snapshot --skip publish --clean -f=goreleaser-aikido.yml
 
       - name: List files
         run: |
@@ -72,7 +72,7 @@ jobs:
           mv dist/build-macos_darwin_amd64_v1/trivy dist/build-macos_darwin_amd64_v1/trivy-darwin-amd64
           mv dist/build-macos_darwin_arm64/trivy dist/build-macos_darwin_arm64/trivy-darwin-arm64
           mv dist/build-windows_windows_amd64_v1/trivy.exe dist/build-windows_windows_amd64_v1/trivy-windows-amd64.exe
-    
+          
       - name: Archive build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -84,3 +84,6 @@ jobs:
             dist/build-macos_darwin_amd64_v1/trivy-darwin-amd64
             dist/build-macos_darwin_arm64/trivy-darwin-arm64
             dist/build-windows_windows_amd64_v1/trivy-windows-amd64.exe
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*checksums.txt
