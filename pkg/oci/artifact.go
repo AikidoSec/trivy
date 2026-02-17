@@ -236,9 +236,6 @@ func (a Artifacts) Download(ctx context.Context, dst string, opt DownloadOption)
 			return nil
 		}
 
-		if !shouldTryOtherRepo(err) {
-			return xerrors.Errorf("failed to download artifact from %s: %w", art.repository, err)
-		}
 		log.ErrorContext(ctx, "Failed to download artifact", log.String("repo", art.repository), log.Err(err))
 		if i < len(a)-1 {
 			log.InfoContext(ctx, "Trying to download artifact from other repository...")
