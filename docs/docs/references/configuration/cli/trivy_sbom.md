@@ -24,7 +24,7 @@ trivy sbom [flags] SBOM_PATH
       --cache-ttl duration             cache TTL when using redis as cache backend
       --compliance string              compliance report to generate
       --custom-headers strings         custom headers in client mode
-      --db-repository strings          OCI repository(ies) to retrieve trivy-db in order of priority (default [mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2])
+      --db-repository strings          OCI repository(ies) to retrieve trivy-db in order of priority (default [public.ecr.aws/aikido/aikido-security/trivy-db:latest,public.ecr.aws/aikido/aikido-security/trivy-db:latest])
       --detection-priority string      specify the detection priority:
                                          - "precise": Prioritizes precise by minimizing false positives.
                                          - "comprehensive": Aims to detect more security findings at the cost of potential false positives.

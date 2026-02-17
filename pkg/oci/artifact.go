@@ -2,7 +2,6 @@ package oci
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"github.com/cheggaaa/pb/v3"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/hashicorp/go-multierror"
 	"github.com/samber/lo"
 	"golang.org/x/xerrors"
@@ -20,7 +18,6 @@ import (
 	"github.com/aquasecurity/trivy/pkg/fanal/types"
 	"github.com/aquasecurity/trivy/pkg/log"
 	"github.com/aquasecurity/trivy/pkg/remote"
-	"github.com/aquasecurity/trivy/pkg/version/doc"
 	xio "github.com/aquasecurity/trivy/pkg/x/io"
 	xos "github.com/aquasecurity/trivy/pkg/x/os"
 )
@@ -246,34 +243,38 @@ func (a Artifacts) Download(ctx context.Context, dst string, opt DownloadOption)
 	return xerrors.Errorf("failed to download artifact from any source: %w", errs)
 }
 
-func shouldTryOtherRepo(err error) bool {
-	var terr *transport.Error
-	if !errors.As(err, &terr) {
-		return false
-	}
-
-	for _, diagnostic := range terr.Errors {
-		// For better user experience
-		if diagnostic.Code == transport.DeniedErrorCode || diagnostic.Code == transport.UnauthorizedErrorCode {
-			// e.g. https://trivy.dev/latest/docs/references/troubleshooting/#db
-			log.Warnf("See %s", doc.URL("/docs/references/troubleshooting/", "db"))
-			break
-		}
-	}
-
-	// try the following artifact if a temporary error occurs
-	if terr.Temporary() {
-		return true
-	}
-
-	// `GCR` periodically returns `BLOB_UNKNOWN` error.
-	// cf. https://github.com/aquasecurity/trivy/discussions/8020
-	// In this case we need to check other repositories.
-	for _, e := range terr.Errors {
-		if e.Code == transport.BlobUnknownErrorCode {
-			return true
-		}
-	}
-
-	return false
-}
+// Unused: shouldTryOtherRepo was part of the upstream multi-repository fallback logic
+// (GHCR -> GCR). Aikido uses a single ECR repository so this is no longer needed.
+// Kept commented out for reference.
+//
+// func shouldTryOtherRepo(err error) bool {
+// 	var terr *transport.Error
+// 	if !errors.As(err, &terr) {
+// 		return false
+// 	}
+//
+// 	for _, diagnostic := range terr.Errors {
+// 		// For better user experience
+// 		if diagnostic.Code == transport.DeniedErrorCode || diagnostic.Code == transport.UnauthorizedErrorCode {
+// 			// e.g. https://trivy.dev/latest/docs/references/troubleshooting/#db
+// 			log.Warnf("See %s", doc.URL("/docs/references/troubleshooting/", "db"))
+// 			break
+// 		}
+// 	}
+//
+// 	// try the following artifact if a temporary error occurs
+// 	if terr.Temporary() {
+// 		return true
+// 	}
+//
+// 	// `GCR` periodically returns `BLOB_UNKNOWN` error.
+// 	// cf. https://github.com/aquasecurity/trivy/discussions/8020
+// 	// In this case we need to check other repositories.
+// 	for _, e := range terr.Errors {
+// 		if e.Code == transport.BlobUnknownErrorCode {
+// 			return true
+// 		}
+// 	}
+//
+// 	return false
+// }
