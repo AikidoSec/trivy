@@ -53,7 +53,7 @@ var (
 	DBRepositoryFlag = Flag[[]string]{
 		Name:       "db-repository",
 		ConfigName: "db.repository",
-		Default:    []string{db.DefaultAikidoECRRepository, db.DefaultAikidoECRRepository},
+		Default:    []string{db.DefaultGCRRepository, db.DefaultGHCRRepository},
 		Usage:      "OCI repository(ies) to retrieve trivy-db in order of priority",
 	}
 	JavaDBRepositoryFlag = Flag[[]string]{

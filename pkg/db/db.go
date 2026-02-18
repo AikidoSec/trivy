@@ -26,10 +26,6 @@ const (
 )
 
 var (
-	// Aikido Elastic Container Registry
-	DefaultAikidoECRRepository = fmt.Sprintf("%s:%s", "public.ecr.aws/aikido/aikido-security/trivy-db", "latest")
-	defaultAikidoECRRepository = lo.Must(name.NewTag(DefaultAikidoECRRepository))
-
 	// GitHub Container Registry
 	DefaultGHCRRepository = fmt.Sprintf("%s:%d", "ghcr.io/aquasecurity/trivy-db", db.SchemaVersion)
 	defaultGHCRRepository = lo.Must(name.NewTag(DefaultGHCRRepository))
@@ -82,8 +78,8 @@ func Dir(cacheDir string) string {
 func NewClient(dbDir string, quiet bool, opts ...Option) *Client {
 	o := &options{
 		dbRepositories: []name.Reference{
-			defaultAikidoECRRepository,
-			defaultAikidoECRRepository,
+			defaultGCRRepository,
+			defaultGHCRRepository,
 		},
 	}
 
