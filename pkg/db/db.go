@@ -26,19 +26,13 @@ const (
 )
 
 var (
-	// Aikido Elastic Container Registry
-	DefaultAikidoECRRepository = fmt.Sprintf("%s:%s", "public.ecr.aws/aikido/aikido-security/trivy-db", "latest")
-	defaultAikidoECRRepository = lo.Must(name.NewTag(DefaultAikidoECRRepository))
-
 	// GitHub Container Registry
-	// Unused: Aikido uses its own ECR repository (defaultAikidoECRRepository) instead of the
-	// upstream GHCR and GCR repositories. Kept commented out for reference.
-	// DefaultGHCRRepository = fmt.Sprintf("%s:%d", "ghcr.io/aquasecurity/trivy-db", db.SchemaVersion)
-	// defaultGHCRRepository = lo.Must(name.NewTag(DefaultGHCRRepository))
+	DefaultGHCRRepository = fmt.Sprintf("%s:%d", "ghcr.io/aquasecurity/trivy-db", db.SchemaVersion)
+	defaultGHCRRepository = lo.Must(name.NewTag(DefaultGHCRRepository))
 
 	// GCR mirror
-	// DefaultGCRRepository = fmt.Sprintf("%s:%d", "mirror.gcr.io/aquasec/trivy-db", db.SchemaVersion)
-	// defaultGCRRepository = lo.Must(name.NewTag(DefaultGCRRepository))
+	DefaultGCRRepository = fmt.Sprintf("%s:%d", "mirror.gcr.io/aquasec/trivy-db", db.SchemaVersion)
+	defaultGCRRepository = lo.Must(name.NewTag(DefaultGCRRepository))
 
 	Init  = db.Init
 	Close = db.Close
@@ -84,8 +78,8 @@ func Dir(cacheDir string) string {
 func NewClient(dbDir string, quiet bool, opts ...Option) *Client {
 	o := &options{
 		dbRepositories: []name.Reference{
-			defaultAikidoECRRepository,
-			defaultAikidoECRRepository,
+			defaultGCRRepository,
+			defaultGHCRRepository,
 		},
 	}
 

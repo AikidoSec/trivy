@@ -116,8 +116,8 @@ db:
 
   # Same as '--db-repository'
   repository:
-   - public.ecr.aws/aikido/aikido-security/trivy-db:latest
-   - public.ecr.aws/aikido/aikido-security/trivy-db:latest
+   - mirror.gcr.io/aquasec/trivy-db:2
+   - ghcr.io/aquasecurity/trivy-db:2
 
   # Same as '--skip-db-update'
   skip-update: false

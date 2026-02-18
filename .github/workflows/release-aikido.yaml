@@ -89,7 +89,7 @@ jobs:
             dist/trivy-${{ github.ref_name }}-darwin-arm64.tar.gz
             dist/trivy-${{ github.ref_name }}-windows-amd64.zip
             dist/trivy-${{ github.ref_name }}-checksums.txt
-
+            
       - name: Deploy to GitHub Release
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2
         with:
