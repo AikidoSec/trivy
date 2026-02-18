@@ -83,6 +83,12 @@ jobs:
             dist/build-macos_darwin_amd64_v1/trivy-${{ github.ref_name }}-darwin-amd64
             dist/build-macos_darwin_arm64/trivy-${{ github.ref_name }}-darwin-arm64
             dist/build-windows_windows_amd64_v1/trivy-${{ github.ref_name }}-windows-amd64.exe
+            dist/trivy-${{ github.ref_name }}-linux-amd64.tar.gz
+            dist/trivy-${{ github.ref_name }}-linux-arm64.tar.gz
+            dist/trivy-${{ github.ref_name }}-darwin-amd64.tar.gz
+            dist/trivy-${{ github.ref_name }}-darwin-arm64.tar.gz
+            dist/trivy-${{ github.ref_name }}-windows-amd64.zip
+            dist/trivy-${{ github.ref_name }}-checksums.txt
             
       - name: Deploy to GitHub Release
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2
@@ -93,3 +99,9 @@ jobs:
             dist/build-macos_darwin_amd64_v1/trivy-${{ github.ref_name }}-darwin-amd64
             dist/build-macos_darwin_arm64/trivy-${{ github.ref_name }}-darwin-arm64
             dist/build-windows_windows_amd64_v1/trivy-${{ github.ref_name }}-windows-amd64.exe
+            dist/trivy-${{ github.ref_name }}-linux-amd64.tar.gz
+            dist/trivy-${{ github.ref_name }}-linux-arm64.tar.gz
+            dist/trivy-${{ github.ref_name }}-darwin-amd64.tar.gz
+            dist/trivy-${{ github.ref_name }}-darwin-arm64.tar.gz
+            dist/trivy-${{ github.ref_name }}-windows-amd64.zip
+            dist/trivy-${{ github.ref_name }}-checksums.txt
