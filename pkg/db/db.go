@@ -31,14 +31,12 @@ var (
 	defaultAikidoECRRepository = lo.Must(name.NewTag(DefaultAikidoECRRepository))
 
 	// GitHub Container Registry
-	// Unused: Aikido uses its own ECR repository (defaultAikidoECRRepository) instead of the
-	// upstream GHCR and GCR repositories. Kept commented out for reference.
-	// DefaultGHCRRepository = fmt.Sprintf("%s:%d", "ghcr.io/aquasecurity/trivy-db", db.SchemaVersion)
-	// defaultGHCRRepository = lo.Must(name.NewTag(DefaultGHCRRepository))
+	DefaultGHCRRepository = fmt.Sprintf("%s:%d", "ghcr.io/aquasecurity/trivy-db", db.SchemaVersion)
+	defaultGHCRRepository = lo.Must(name.NewTag(DefaultGHCRRepository))
 
 	// GCR mirror
-	// DefaultGCRRepository = fmt.Sprintf("%s:%d", "mirror.gcr.io/aquasec/trivy-db", db.SchemaVersion)
-	// defaultGCRRepository = lo.Must(name.NewTag(DefaultGCRRepository))
+	DefaultGCRRepository = fmt.Sprintf("%s:%d", "mirror.gcr.io/aquasec/trivy-db", db.SchemaVersion)
+	defaultGCRRepository = lo.Must(name.NewTag(DefaultGCRRepository))
 
 	Init  = db.Init
 	Close = db.Close

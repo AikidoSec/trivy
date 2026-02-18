@@ -27,7 +27,7 @@ trivy vm [flags] VM_IMAGE
       --compliance string                 compliance report to generate
       --config-file-schemas strings       specify paths to JSON configuration file schemas to determine that a file matches some configuration and pass the schema to Rego checks for type checking
       --custom-headers strings            custom headers in client mode
-      --db-repository strings             OCI repository(ies) to retrieve trivy-db in order of priority (default [public.ecr.aws/aikido/aikido-security/trivy-db:latest,public.ecr.aws/aikido/aikido-security/trivy-db:latest])
+      --db-repository strings             OCI repository(ies) to retrieve trivy-db in order of priority (default [mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2])
       --dependency-tree                   [EXPERIMENTAL] show dependency origin tree of vulnerable packages
       --detection-priority string         specify the detection priority:
                                             - "precise": Prioritizes precise by minimizing false positives.
