@@ -391,10 +391,17 @@ func (d pomDependency) ToArtifact(opts analysisOptions) artifact {
 		}
 	}
 
+	// Default scope is "compile" per Maven spec
+	scope := d.Scope
+	if scope == "" {
+		scope = "compile"
+	}
+
 	return artifact{
 		GroupID:      d.GroupID,
 		ArtifactID:   d.ArtifactID,
 		Version:      newVersion(d.Version),
+		Scope:        scope,
 		Exclusions:   exclusions,
 		Locations:    locations,
 		Relationship: ftypes.RelationshipIndirect, // default
