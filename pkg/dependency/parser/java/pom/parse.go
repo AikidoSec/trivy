@@ -130,6 +130,7 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 
 	// Add GCP authentication headers to GCP repositories
 	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
+	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
 
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
@@ -412,6 +413,7 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 
 	// Add GCP authentication headers to GCP repositories
 	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
+	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
 
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
