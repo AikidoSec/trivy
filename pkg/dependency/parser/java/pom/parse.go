@@ -504,9 +504,9 @@ func (p *Parser) parseDependencies(deps []pomDependency, props map[string]string
 
 // applyGradleMetadataToDepManagement applies Gradle Module Metadata to resolve version ranges.
 //
-// PRECEDENCE: Gradle Module Metadata has HIGHEST priority over version range parsing.
-// - If .module file exists: use "prefers" field as the concrete version
-// - If no .module file: fall back to version range parsing logic (extractVersionFromRange)
+// PRECEDENCE: Gradle Module Metadata has HIGHEST priority.
+// - If .module file exists: use the concrete version (strictly > requires > prefers)
+// - If no .module file: version ranges are handled in newVersion()
 //
 // This follows Gradle's standard behavior where .module files provide authoritative metadata.
 func (p *Parser) applyGradleMetadataToDepManagement(result *analysisResult) {
