@@ -1,6 +1,7 @@
 package pom
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -968,7 +969,7 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo RemoteRepositoryConfig, paths
 		return nil, xerrors.Errorf("failed to read POM response: %w", err)
 	}
 
-	content, err := parsePom(resp.Body, false)
+	content, err := parsePom(bytes.NewReader(bodyBytes), false)
 	if err != nil {
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
 	}
