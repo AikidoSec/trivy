@@ -159,6 +159,13 @@ type versionRange struct {
 //   - For ranges with only an upper bound: use the upper bound
 //   - For multiple ranges: use the first range that yields a version
 //
+// Note: exclusive bounds (parentheses) are treated the same as inclusive bounds
+// (brackets) when extracting the version. For example, "(1.0,2.0)" yields "1.0"
+// just like "[1.0,2.0)". This is intentional because resolving to the exact next
+// version above/below an exclusive bound would require querying the repository
+// for all available versions, which is not possible in offline/static analysis.
+// The extracted bound serves as the best approximation.
+//
 // Examples:
 //
 //	"[1.0,2.0)" → "1.0"
