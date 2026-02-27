@@ -609,7 +609,6 @@ func Test_cargoAnalyzer_Analyze(t *testing.T) {
 			},
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a, err := newCargoAnalyzer(analyzer.AnalyzerOptions{})
@@ -623,6 +622,103 @@ func Test_cargoAnalyzer_Analyze(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func Test_cargoAnalyzer_GitDependency(t *testing.T) {
+	a, err := newCargoAnalyzer(analyzer.AnalyzerOptions{})
+	require.NoError(t, err)
+
+	got, err := a.PostAnalyze(t.Context(), analyzer.PostAnalysisInput{
+		FS: os.DirFS("testdata/toml-git-dep"),
+	})
+	require.NoError(t, err)
+
+	want := &analyzer.AnalysisResult{
+		Applications: []types.Application{
+			{
+				Type:     types.Cargo,
+				FilePath: "Cargo.lock",
+				Packages: types.Packages{
+					{
+						ID:           "app@0.1.0",
+						Name:         "app",
+						Version:      "0.1.0",
+						Relationship: types.RelationshipRoot,
+						Locations: []types.Location{
+							{
+								StartLine: 13,
+								EndLine:   19,
+							},
+						},
+						DependsOn: []string{
+							"memchr@2.5.0",
+							"regex@1.7.3",
+						},
+					},
+					{
+						ID:           "memchr@2.5.0",
+						Name:         "memchr",
+						Version:      "2.5.0",
+						Indirect:     false,
+						Relationship: types.RelationshipDirect,
+						Locations: []types.Location{
+							{
+								StartLine: 21,
+								EndLine:   24,
+							},
+						},
+					},
+					{
+						ID:           "regex@1.7.3",
+						Name:         "regex",
+						Version:      "1.7.3",
+						Indirect:     false,
+						Relationship: types.RelationshipDirect,
+						Locations: []types.Location{
+							{
+								StartLine: 26,
+								EndLine:   35,
+							},
+						},
+						DependsOn: []string{
+							"aho-corasick@0.7.20",
+							"memchr@2.5.0",
+							"regex-syntax@0.6.29",
+						},
+					},
+					{
+						ID:           "aho-corasick@0.7.20",
+						Name:         "aho-corasick",
+						Version:      "0.7.20",
+						Indirect:     true,
+						Relationship: types.RelationshipIndirect,
+						Locations: []types.Location{
+							{
+								StartLine: 4,
+								EndLine:   11,
+							},
+						},
+						DependsOn: []string{"memchr@2.5.0"},
+					},
+					{
+						ID:           "regex-syntax@0.6.29",
+						Name:         "regex-syntax",
+						Version:      "0.6.29",
+						Indirect:     true,
+						Relationship: types.RelationshipIndirect,
+						Locations: []types.Location{
+							{
+								StartLine: 37,
+								EndLine:   41,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	assert.Equal(t, want, got)
 }
 
 func TestMatchVersion(t *testing.T) {
