@@ -242,13 +242,16 @@ func (a cargoAnalyzer) parseRootCargoTOML(fsys fs.FS, filePath string) (string, 
 			deps[name] = ver
 		case map[string]any:
 			// e.g. serde = { version = "1.0", features = ["derive"] }
-			for k, v := range ver {
-				if k == "version" {
-					if vv, ok := v.(string); ok {
-						deps[name] = vv
-					}
-					break
+			// e.g. keepawake = { git = "https://..." }
+			// e.g. scrap = { path = "libs/scrap" }
+			version, hasVersion := ver["version"]
+			if hasVersion {
+				if vv, ok := version.(string); ok {
+					deps[name] = vv
 				}
+			} else {
+				// Git/path dependencies without a version constraint match any version
+				deps[name] = "*"
 			}
 		}
 	}
@@ -276,6 +279,11 @@ func (a cargoAnalyzer) walkIndirectDependencies(pkg types.Package, pkgIDs, deps 
 
 // cf. https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html
 func (a cargoAnalyzer) matchVersion(currentVersion, constraint string) (bool, error) {
+	// Git/path dependencies without a version field match any version
+	if constraint == "*" {
+		return true, nil
+	}
+
 	// `` == `^` - https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#caret-requirements
 	// Add `^` for correct version comparison
 	//   - 1.2.3 -> ^1.2.3
