@@ -1,0 +1,35 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.example</groupId>
+        <artifactId>import-shadowing-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <groupId>com.example</groupId>
+    <artifactId>import-shadowing-child</artifactId>
+    <version>1.0.0</version>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Non-import entry for the same groupId:artifactId as parent's import.
+                 Before the fix, this would shadow the parent's import entry in
+                 mergeDependencyManagements(), preventing BOM expansion. -->
+            <dependency>
+                <groupId>org.example</groupId>
+                <artifactId>example-bom</artifactId>
+                <version>1.0.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.example</groupId>
+            <artifactId>example-api</artifactId>
+        </dependency>
+    </dependencies>
+
+</project>

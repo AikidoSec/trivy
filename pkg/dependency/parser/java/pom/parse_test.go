@@ -892,6 +892,9 @@ func TestPom_Parse(t *testing.T) {
 			},
 		},
 		{
+			// Version range (,1.0] resolves to "1.0" using the upper bound.
+			// Maven would query the repository for the highest version <= 1.0;
+			// Trivy approximates by extracting the bound from the range.
 			name:      "version requirement",
 			inputFile: filepath.Join("testdata", "version-requirement", "pom.xml"),
 			local:     true,
@@ -904,14 +907,23 @@ func TestPom_Parse(t *testing.T) {
 					Relationship: ftypes.RelationshipRoot,
 				},
 				{
-					ID:           "org.example:example-api",
+					ID:           "org.example:example-api:1.0",
 					Name:         "org.example:example-api",
+					Version:      "1.0",
 					Relationship: ftypes.RelationshipDirect,
 					Locations: []ftypes.Location{
 						{
 							StartLine: 28,
 							EndLine:   32,
 						},
+					},
+				},
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:hard:1.0.0",
+					DependsOn: []string{
+						"org.example:example-api:1.0",
 					},
 				},
 			},
@@ -982,6 +994,40 @@ func TestPom_Parse(t *testing.T) {
 					ID: "com.example:import:2.0.0",
 					DependsOn: []string{
 						"org.example:example-api:1.7.30",
+					},
+				},
+			},
+		},
+		{
+			name:      "import shadowing - child non-import entry must not shadow parent import entry",
+			inputFile: filepath.Join("testdata", "import-shadowing", "child", "pom.xml"),
+			local:     true,
+			want: []ftypes.Package{
+				{
+					ID:           "com.example:import-shadowing-child:1.0.0",
+					Name:         "com.example:import-shadowing-child",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipRoot,
+				},
+				{
+					ID:           "org.example:example-api:2.0.0",
+					Name:         "org.example:example-api",
+					Version:      "2.0.0",
+					Licenses:     []string{"The Apache Software License, Version 2.0"},
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 29,
+							EndLine:   32,
+						},
+					},
+				},
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:import-shadowing-child:1.0.0",
+					DependsOn: []string{
+						"org.example:example-api:2.0.0",
 					},
 				},
 			},
@@ -2184,6 +2230,304 @@ func TestPom_Parse(t *testing.T) {
 					ID: "org.springframework.boot:spring-boot-starter-web:3.4.1",
 					DependsOn: []string{
 						"org.apache.tomcat.embed:tomcat-embed-core:10.1.47",
+					},
+				},
+			},
+		},
+		// Maven dependency mediation: "nearest definition wins"
+		// When multiple versions of the same dependency are found at different depths,
+		// Maven selects the version closest to the root.
+		// Tree: Root -> A -> C -> D(2.0.0) and Root -> B -> D(1.0.0)
+		// D should resolve to 1.0.0 (shorter path through B, depth 2 vs depth 3)
+		{
+			name:      "nearest definition wins",
+			inputFile: filepath.Join("testdata", "nearest-definition", "pom.xml"),
+			local:     true,
+			want: []ftypes.Package{
+				{
+					ID:           "com.example:nearest-def:1.0.0",
+					Name:         "com.example:nearest-def",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipRoot,
+				},
+				{
+					ID:           "org.example:example-A:1.0.0",
+					Name:         "org.example:example-A",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 8,
+							EndLine:   12,
+						},
+					},
+				},
+				{
+					ID:           "org.example:example-B:1.0.0",
+					Name:         "org.example:example-B",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 13,
+							EndLine:   17,
+						},
+					},
+				},
+				{
+					ID:           "org.example:example-C:1.0.0",
+					Name:         "org.example:example-C",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipIndirect,
+				},
+				{
+					// D resolves to 1.0.0 (from B, depth 2) NOT 2.0.0 (from A->C, depth 3)
+					ID:           "org.example:example-D:1.0.0",
+					Name:         "org.example:example-D",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipIndirect,
+				},
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:nearest-def:1.0.0",
+					DependsOn: []string{
+						"org.example:example-A:1.0.0",
+						"org.example:example-B:1.0.0",
+					},
+				},
+				{
+					ID: "org.example:example-A:1.0.0",
+					DependsOn: []string{
+						"org.example:example-C:1.0.0",
+					},
+				},
+				{
+					ID: "org.example:example-B:1.0.0",
+					DependsOn: []string{
+						"org.example:example-D:1.0.0",
+					},
+				},
+				{
+					ID: "org.example:example-C:1.0.0",
+					DependsOn: []string{
+						"org.example:example-D:1.0.0",
+					},
+				},
+			},
+		},
+		// Maven dependency mediation: "first declaration wins" at same depth.
+		// When two dependencies at the same depth bring different versions of the same artifact,
+		// the first declared dependency's version wins.
+		// Tree: Root -> E -> G(1.0.0) and Root -> F -> G(2.0.0)
+		// G should resolve to 1.0.0 (from E, declared first in root POM)
+		{
+			name:      "first declaration wins at same depth",
+			inputFile: filepath.Join("testdata", "first-declaration-wins", "pom.xml"),
+			local:     true,
+			want: []ftypes.Package{
+				{
+					ID:           "com.example:first-decl:1.0.0",
+					Name:         "com.example:first-decl",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipRoot,
+				},
+				{
+					ID:           "org.example:example-E:1.0.0",
+					Name:         "org.example:example-E",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 8,
+							EndLine:   12,
+						},
+					},
+				},
+				{
+					ID:           "org.example:example-F:1.0.0",
+					Name:         "org.example:example-F",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 13,
+							EndLine:   17,
+						},
+					},
+				},
+				{
+					// G resolves to 1.0.0 (from E, declared first) NOT 2.0.0 (from F)
+					ID:           "org.example:example-G:1.0.0",
+					Name:         "org.example:example-G",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipIndirect,
+				},
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:first-decl:1.0.0",
+					DependsOn: []string{
+						"org.example:example-E:1.0.0",
+						"org.example:example-F:1.0.0",
+					},
+				},
+				{
+					ID: "org.example:example-E:1.0.0",
+					DependsOn: []string{
+						"org.example:example-G:1.0.0",
+					},
+				},
+				{
+					ID: "org.example:example-F:1.0.0",
+					DependsOn: []string{
+						"org.example:example-G:1.0.0",
+					},
+				},
+			},
+		},
+		// Maven version range resolution.
+		// Version ranges like [1.5,2.0), (,3.0], [2.0,) are resolved to usable versions
+		// by extracting bounds (lower bound preferred, then upper bound).
+		{
+			name:      "version ranges",
+			inputFile: filepath.Join("testdata", "version-range", "pom.xml"),
+			local:     true,
+			want: []ftypes.Package{
+				{
+					ID:           "com.example:version-range:1.0.0",
+					Name:         "com.example:version-range",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipRoot,
+				},
+				{
+					// [1.5,2.0) → resolves to lower bound 1.5
+					ID:           "org.example:example-range-lower:1.5",
+					Name:         "org.example:example-range-lower",
+					Version:      "1.5",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 8,
+							EndLine:   12,
+						},
+					},
+				},
+				// [2.0,) → resolves to lower bound 2.0
+				{
+					ID:           "org.example:example-range-open:2.0",
+					Name:         "org.example:example-range-open",
+					Version:      "2.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 18,
+							EndLine:   22,
+						},
+					},
+				},
+				{
+					// (,3.0] → resolves to upper bound 3.0 (no lower bound)
+					ID:           "org.example:example-range-upper:3.0",
+					Name:         "org.example:example-range-upper",
+					Version:      "3.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 13,
+							EndLine:   17,
+						},
+					},
+				},
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:version-range:1.0.0",
+					DependsOn: []string{
+						"org.example:example-range-lower:1.5",
+						"org.example:example-range-open:2.0",
+						"org.example:example-range-upper:3.0",
+					},
+				},
+			},
+		},
+		// Maven scope transition matrix.
+		// Transitive dependency scopes are transformed based on the parent's effective scope.
+		// compile+compile=compile, compile+runtime=runtime, compile+provided=excluded,
+		// runtime+compile=runtime, runtime+runtime=runtime.
+		// L (provided dep of J) should be excluded; all others included.
+		{
+			name:      "scope transition matrix",
+			inputFile: filepath.Join("testdata", "scope-transition", "pom.xml"),
+			local:     true,
+			want: []ftypes.Package{
+				{
+					ID:           "com.example:scope-transition:1.0.0",
+					Name:         "com.example:scope-transition",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipRoot,
+				},
+				{
+					// H has runtime scope (direct dependency)
+					ID:           "org.example:example-H:1.0.0",
+					Name:         "org.example:example-H",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 8,
+							EndLine:   13,
+						},
+					},
+				},
+				{
+					// J has compile scope (direct dependency, default)
+					ID:           "org.example:example-J:1.0.0",
+					Name:         "org.example:example-J",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipDirect,
+					Locations: ftypes.Locations{
+						{
+							StartLine: 14,
+							EndLine:   18,
+						},
+					},
+				},
+				{
+					// I has compile scope in H's POM; effective scope = runtime+compile = runtime
+					ID:           "org.example:example-I:1.0.0",
+					Name:         "org.example:example-I",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipIndirect,
+				},
+				{
+					// K has runtime scope in J's POM; effective scope = compile+runtime = runtime
+					ID:           "org.example:example-K:1.0.0",
+					Name:         "org.example:example-K",
+					Version:      "1.0.0",
+					Relationship: ftypes.RelationshipIndirect,
+				},
+				// L is NOT included: it has provided scope in J's POM,
+				// and compile+provided = excluded per Maven's scope matrix.
+			},
+			wantDeps: []ftypes.Dependency{
+				{
+					ID: "com.example:scope-transition:1.0.0",
+					DependsOn: []string{
+						"org.example:example-H:1.0.0",
+						"org.example:example-J:1.0.0",
+					},
+				},
+				{
+					ID: "org.example:example-H:1.0.0",
+					DependsOn: []string{
+						"org.example:example-I:1.0.0",
+					},
+				},
+				{
+					ID: "org.example:example-J:1.0.0",
+					DependsOn: []string{
+						"org.example:example-K:1.0.0",
 					},
 				},
 			},
