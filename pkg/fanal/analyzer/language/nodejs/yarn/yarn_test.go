@@ -90,7 +90,6 @@ func Test_yarnLibraryAnalyzer_Analyze(t *testing.T) {
 								ID:           "js-tokens@4.0.0",
 								Name:         "js-tokens",
 								Version:      "4.0.0",
-								Dev:          true,
 								Indirect:     true,
 								Relationship: types.RelationshipIndirect,
 								Locations: []types.Location{
@@ -104,7 +103,6 @@ func Test_yarnLibraryAnalyzer_Analyze(t *testing.T) {
 								ID:           "loose-envify@1.4.0",
 								Name:         "loose-envify",
 								Version:      "1.4.0",
-								Dev:          true,
 								Indirect:     true,
 								Relationship: types.RelationshipIndirect,
 								Locations: []types.Location{
@@ -121,7 +119,6 @@ func Test_yarnLibraryAnalyzer_Analyze(t *testing.T) {
 								ID:           "object-assign@4.1.1",
 								Name:         "object-assign",
 								Version:      "4.1.1",
-								Dev:          true,
 								Indirect:     true,
 								Relationship: types.RelationshipIndirect,
 								Locations: []types.Location{
