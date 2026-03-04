@@ -310,7 +310,7 @@ func (a yarnAnalyzer) walkDependencies(parent *types.Package, pkgs map[string]ty
 		// If the package is already marked as a production dependency, skip overwriting it.
 		// Since the dev field is boolean, it cannot determine if the package is already processed,
 		// so we need to check the relationship field.
-		if pkg.Relationship == types.RelationshipUnknown || pkg.Dev {
+		if pkg.Relationship == types.RelationshipUnknown && pkg.Dev != true {
 			pkg.Dev = dev
 		}
 
@@ -342,7 +342,7 @@ func (a yarnAnalyzer) walkIndirectDependencies(pkg types.Package, pkgs map[strin
 			continue
 		}
 
-		if dep.Relationship == types.RelationshipUnknown || dep.Dev {
+		if dep.Relationship == types.RelationshipUnknown && dep.Dev != true {
 			dep.Dev = pkg.Dev
 		}
 		dep.Indirect = true
