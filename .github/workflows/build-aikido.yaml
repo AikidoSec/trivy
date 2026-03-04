@@ -15,8 +15,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install Mage
+        run: go install github.com/magefile/mage@latest
+
       - name: Run tests
-        run: go test ./...
+        run: mage test:unit
 
   goreleaser:
     needs: test
