@@ -19,6 +19,7 @@ jobs:
         run: go test ./...
 
   goreleaser:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
