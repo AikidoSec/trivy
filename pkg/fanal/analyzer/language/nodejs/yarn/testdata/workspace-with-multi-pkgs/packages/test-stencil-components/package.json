@@ -1,0 +1,11 @@
+{
+  "name": "@test/stencil-components",
+  "version": "2.5.0",
+  "dependencies": {
+    "@stencil/core": "^4.0.3",
+    "uniqolor": "^1.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.1.3"
+  }
+}
