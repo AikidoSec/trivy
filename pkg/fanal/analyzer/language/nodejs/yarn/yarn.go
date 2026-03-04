@@ -325,13 +325,13 @@ func (a yarnAnalyzer) walkDependencies(parent *types.Package, pkgs map[string]ty
 		parent.DependsOn = append(parent.DependsOn, pkg.ID)
 
 		// Walk indirect dependencies
-		a.walkIndirectDependencies(pkg, pkgs, seenIDs)
+		a.walkIndirectDependencies(pkg, pkgs, seenIDs, dev)
 	}
 
 	return nil
 }
 
-func (a yarnAnalyzer) walkIndirectDependencies(pkg types.Package, pkgs map[string]types.Package, seenIDs set.Set[string]) {
+func (a yarnAnalyzer) walkIndirectDependencies(pkg types.Package, pkgs map[string]types.Package, seenIDs set.Set[string], dev bool) {
 	for _, pkgID := range pkg.DependsOn {
 		if seenIDs.Contains(pkgID) {
 			continue // Skip if we've already seen this package
@@ -342,9 +342,11 @@ func (a yarnAnalyzer) walkIndirectDependencies(pkg types.Package, pkgs map[strin
 			continue
 		}
 
+		// If the package is already marked as a production dependency, skip overwriting it.
+		// Since the dev field is boolean, it cannot determine if the package is already processed,
+		// so we need to check the relationship field.
 		if dep.Relationship == types.RelationshipUnknown || dep.Dev {
-			log.Debug("Marking indirect dependency as dev", log.String("dep", dep.ID), log.Bool("dev", pkg.Dev))
-			dep.Dev = pkg.Dev
+			dep.Dev = dev
 		}
 		dep.Indirect = true
 		dep.Relationship = types.RelationshipIndirect
@@ -353,7 +355,7 @@ func (a yarnAnalyzer) walkIndirectDependencies(pkg types.Package, pkgs map[strin
 		seenIDs.Append(dep.ID)
 
 		// Recursively walk dependencies
-		a.walkIndirectDependencies(dep, pkgs, seenIDs)
+		a.walkIndirectDependencies(dep, pkgs, seenIDs, dev)
 	}
 }
 
