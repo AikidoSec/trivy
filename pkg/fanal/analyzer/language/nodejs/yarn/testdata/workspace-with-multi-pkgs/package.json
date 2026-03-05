@@ -1,0 +1,11 @@
+{
+  "name": "@test/components",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "devDependencies": {
+    "prettier": "^2.8.8"
+  },
+  "packageManager": "yarn@3.6.1"
+}

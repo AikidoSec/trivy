@@ -1,0 +1,7 @@
+{
+  "name": "@test/react-components",
+  "version": "2.5.0",
+  "devDependencies": {
+    "@test/stencil-components": "workspace:*"
+  }
+}

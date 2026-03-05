@@ -805,6 +805,82 @@ func Test_yarnLibraryAnalyzer_Analyze(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "workspace with multiple packages and cross-workspace deps",
+			dir:  "testdata/workspace-with-multi-pkgs",
+			want: &analyzer.AnalysisResult{
+				Applications: []types.Application{
+					{
+						Type:     types.Yarn,
+						FilePath: "yarn.lock",
+						Packages: types.Packages{
+							{
+								ID:           "package.json",
+								Name:         "@test/components",
+								Relationship: types.RelationshipRoot,
+								DependsOn: []string{
+									"@test/react-components@2.5.0",
+									"@test/stencil-components@2.5.0",
+									"@test/vue-components@2.5.0",
+									"prettier@2.8.8",
+								},
+							},
+							{
+								ID:           "@test/react-components@2.5.0",
+								Name:         "@test/react-components",
+								Version:      "2.5.0",
+								Relationship: types.RelationshipWorkspace,
+							},
+							{
+								ID:           "@test/vue-components@2.5.0",
+								Name:         "@test/vue-components",
+								Version:      "2.5.0",
+								Relationship: types.RelationshipWorkspace,
+								DependsOn: []string{
+									"@test/stencil-components@2.5.0",
+								},
+							},
+							{
+								ID:           "@test/stencil-components@2.5.0",
+								Name:         "*",
+								Version:      "2.5.0",
+								Relationship: types.RelationshipDirect,
+								DependsOn: []string{
+									"typescript@5.1.6",
+								},
+							},
+							{
+								ID:           "prettier@2.8.8",
+								Name:         "prettier",
+								Version:      "2.8.8",
+								Dev:          true,
+								Relationship: types.RelationshipDirect,
+								Locations: []types.Location{
+									{
+										StartLine: 40,
+										EndLine:   47,
+									},
+								},
+							},
+							{
+								ID:           "typescript@5.1.6",
+								Name:         "typescript",
+								Version:      "5.1.6",
+								Indirect:     true,
+								Dev:          true,
+								Relationship: types.RelationshipIndirect,
+								Locations: []types.Location{
+									{
+										StartLine: 49,
+										EndLine:   57,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 		// docker run --rm -it node@sha256:2d5e8a8a51bc341fd5f2eed6d91455c3a3d147e91a14298fc564b5dc519c1666 sh
 		// mkdir test && cd "$_"
 		// yarn set version 1.22.19
