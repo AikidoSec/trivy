@@ -1,6 +1,7 @@
 package pom
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -374,6 +375,7 @@ type analysisResult struct {
 	dependencyManagement []pomDependency // Keep the order of dependencies in 'dependencyManagement'
 	properties           map[string]string
 	modules              []string
+	gradleMetadata       *gradleModuleMetadata // Gradle Module Metadata if available
 }
 
 type analysisOptions struct {
@@ -417,6 +419,7 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 		dependencyManagement: depManagement,
 		properties:           props,
 		modules:              pom.content.Modules.Module,
+		gradleMetadata:       pom.gradleMetadata,
 	}, nil
 }
 
@@ -500,6 +503,48 @@ func (p *Parser) parseDependencies(deps []pomDependency, props map[string]string
 	return dependencies
 }
 
+// applyGradleMetadataToDepManagement applies Gradle Module Metadata to resolve version ranges.
+//
+// PRECEDENCE: Gradle Module Metadata has HIGHEST priority.
+// - If .module file exists: use the concrete version (strictly > requires > prefers)
+// - If no .module file: version ranges are handled in newVersion()
+//
+// This follows Gradle's standard behavior where .module files provide authoritative metadata.
+func (p *Parser) applyGradleMetadataToDepManagement(result *analysisResult) {
+	if result.gradleMetadata == nil {
+		return
+	}
+	for i, dep := range result.dependencyManagement {
+		// Check if this dependency has a version range (contains comma or brackets/parentheses)
+		if dep.Version != "" && isVersionRange(dep.Version) {
+
+			// Look up the preferred version in the Gradle metadata
+			preferredVersion := result.gradleMetadata.getPreferredVersion(dep.GroupID, dep.ArtifactID)
+
+			if preferredVersion != "" {
+				// Check if the preferred version is ALSO a range (yes, this can happen!)
+				// If so, we still need to parse it
+				if isVersionRange(preferredVersion) {
+					// Use the preferred range (Gradle's choice over POM's choice)
+					result.dependencyManagement[i].Version = preferredVersion
+				} else {
+					// Use the concrete version from Gradle metadata
+					result.dependencyManagement[i].Version = preferredVersion
+				}
+			}
+		}
+	}
+}
+
+// isVersionRange checks if a version string is a range (contains range indicators)
+func isVersionRange(version string) bool {
+	return strings.Contains(version, ",") ||
+		strings.Contains(version, "[") ||
+		strings.Contains(version, "]") ||
+		strings.Contains(version, "(") ||
+		strings.Contains(version, ")")
+}
+
 func (p *Parser) resolveDepManagement(props map[string]string, depManagement []pomDependency) []pomDependency {
 	var newDepManagement, imports []pomDependency
 	for _, dep := range depManagement {
@@ -521,6 +566,9 @@ func (p *Parser) resolveDepManagement(props map[string]string, depManagement []p
 		if err != nil {
 			continue
 		}
+
+		// Apply Gradle Module Metadata if available to resolve version ranges
+		p.applyGradleMetadataToDepManagement(&result)
 
 		// We need to recursively check all nested depManagements,
 		// so that we don't miss dependencies on nested depManagements with `Import` scope.
@@ -786,9 +834,12 @@ func (p *Parser) remoteRepoRequest(repo RemoteRepositoryConfig, paths []string) 
 	if err != nil {
 		return nil, xerrors.Errorf("unable to create HTTP request: %w", err)
 	}
+
+	// Standard authentication
 	if repo.Username != "" && repo.Password != "" {
 		req.SetBasicAuth(repo.Username, repo.Password)
 	}
+
 	for _, header := range repo.HTTPHeaders {
 		req.Header.Add(header.Name, header.Value)
 	}
@@ -840,6 +891,55 @@ func (p *Parser) fetchPomFileNameFromMavenMetadata(repo RemoteRepositoryConfig, 
 	return pomFileName, nil
 }
 
+// fetchGradleModuleMetadata fetches the Gradle Module Metadata (.module file) for a given artifact
+func (p *Parser) fetchGradleModuleMetadata(repo RemoteRepositoryConfig, pomPaths []string) *gradleModuleMetadata {
+	// Replace .pom with .module in the last path element
+	if len(pomPaths) == 0 {
+		return nil
+	}
+
+	modulePaths := make([]string, len(pomPaths))
+	copy(modulePaths, pomPaths)
+
+	lastIdx := len(modulePaths) - 1
+	if strings.HasSuffix(modulePaths[lastIdx], ".pom") {
+		modulePaths[lastIdx] = strings.TrimSuffix(modulePaths[lastIdx], ".pom") + ".module"
+	} else {
+		// If it doesn't end with .pom, can't determine .module name
+		return nil
+	}
+
+	req, err := p.remoteRepoRequest(repo, modulePaths)
+	if err != nil {
+		return nil
+	}
+
+	client := xhttp.Client()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	metadata, err := parseGradleModuleMetadata(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	p.logger.Debug("Successfully fetched and parsed Gradle module metadata",
+		log.String("url", req.URL.String()),
+		log.String("group", metadata.Component.Group),
+		log.String("module", metadata.Component.Module),
+		log.String("version", metadata.Component.Version),
+		log.Int("variants", len(metadata.Variants)))
+
+	return metadata
+}
+
 func (p *Parser) fetchPOMFromRemoteRepository(repo RemoteRepositoryConfig, paths []string) (*pom, error) {
 	if isObsoleteRepo(repo.URL) {
 		p.logger.Debug("Obsolete remote repository", log.String("repo", repo.URL))
@@ -863,14 +963,29 @@ func (p *Parser) fetchPOMFromRemoteRepository(repo RemoteRepositoryConfig, paths
 	}
 	defer resp.Body.Close()
 
-	content, err := parsePom(resp.Body, false)
+	// Read the entire body - needed for Gradle metadata marker detection
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, xerrors.Errorf("failed to read POM response: %w", err)
+	}
+
+	content, err := parsePom(bytes.NewReader(bodyBytes), false)
 	if err != nil {
 		return nil, xerrors.Errorf("failed to parse the remote POM: %w", err)
 	}
 
+	// Check if this POM has Gradle Module Metadata
+	var gradleMeta *gradleModuleMetadata
+	if hasGradleMetadataMarker(bodyBytes) {
+		p.logger.Debug("POM has Gradle metadata marker, attempting to fetch .module file",
+			log.String("url", req.URL.String()))
+		gradleMeta = p.fetchGradleModuleMetadata(repo, paths)
+	}
+
 	return &pom{
-		filePath: "", // from remote repositories
-		content:  content,
+		filePath:       "", // from remote repositories
+		content:        content,
+		gradleMetadata: gradleMeta,
 	}, nil
 }
 

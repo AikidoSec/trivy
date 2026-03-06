@@ -20,8 +20,9 @@ import (
 )
 
 type pom struct {
-	filePath string
-	content  *pomXML
+	filePath       string
+	content        *pomXML
+	gradleMetadata *gradleModuleMetadata // Gradle Module Metadata if available
 }
 
 func (p *pom) nil() bool {
