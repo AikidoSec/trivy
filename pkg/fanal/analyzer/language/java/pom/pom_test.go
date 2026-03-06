@@ -146,10 +146,12 @@ func Test_pomAnalyzer_Analyze(t *testing.T) {
 								Version:      "2.0.0",
 								Licenses:     []string{"Apache-2.0"},
 								Relationship: types.RelationshipRoot,
+								DependsOn:    []string{"org.example:example-api:1.0"},
 							},
 							{
-								ID:           "org.example:example-api",
+								ID:           "org.example:example-api:1.0",
 								Name:         "org.example:example-api",
+								Version:      "1.0",
 								Relationship: types.RelationshipDirect,
 								Locations: []types.Location{
 									{
