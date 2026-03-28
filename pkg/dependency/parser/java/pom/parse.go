@@ -118,6 +118,20 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 		content:  content,
 	}
 
+	// This ensures BOM imports can be fetched from these repositories (e.g., GCS buckets)
+	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := root.repositories(p.settings)
+
+	// Add GCP authentication headers to GCP repositories
+	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
+	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
+
+	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
+		return repo.URL
+	})
+	p.snapshotRemoteRepos = lo.UniqBy(append(pomSnapshotRemoteRepos, p.snapshotRemoteRepos...), func(repo RemoteRepositoryConfig) string {
+		return repo.URL
+	})
+
 	// Analyze root POM
 	result, err := p.analyze(root, analysisOptions{})
 	if err != nil {
@@ -365,6 +379,11 @@ func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error)
 	}
 	// Update remoteRepositories
 	pomReleaseRemoteRepos, pomSnapshotRemoteRepos := pom.repositories(p.settings)
+
+	// Add GCP authentication headers to GCP repositories
+	pomReleaseRemoteRepos = addGCPAuthToRepos(pomReleaseRemoteRepos)
+	pomSnapshotRemoteRepos = addGCPAuthToRepos(pomSnapshotRemoteRepos)
+
 	p.releaseRemoteRepos = lo.UniqBy(append(pomReleaseRemoteRepos, p.releaseRemoteRepos...), func(repo RemoteRepositoryConfig) string {
 		return repo.URL
 	})
