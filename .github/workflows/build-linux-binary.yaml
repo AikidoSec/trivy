@@ -1,0 +1,67 @@
+name: Build Release Binary
+
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  build:
+    name: Build Linux Binary
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: write
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'  # Replace with your Go version
+
+    - name: Build Binary
+      run: |
+        mkdir -p dist
+        GOOS=linux CGO_ENABLED=0 GOARCH=amd64 go build -ldflags="-s -w" -o dist/trivy-${GITHUB_REF_NAME}-linux-amd64 cmd/trivy/main.go 
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: dist/trivy-${{ github.ref_name }}-linux-amd64
+        asset_name: trivy-${{ github.ref_name }}-linux-amd64
+        asset_content_type: application/octet-stream
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-arm:
+    name: Build ARM Binary
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: write
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.22'
+
+    - name: Build ARM64 Binary
+      run: |
+        mkdir -p dist
+        GOOS=darwin GOARCH=arm64 go build -ldflags "-w -s" -o dist/trivy-${{ github.ref_name }}-darwin-arm64 cmd/trivy/main.go 
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: dist/trivy-${{ github.ref_name }}-darwin-arm64
+        asset_name: trivy-${{ github.ref_name }}-darwin-arm64
+        asset_content_type: application/octet-stream
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
