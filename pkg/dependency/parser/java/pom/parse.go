@@ -118,8 +118,23 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 		content:  content,
 	}
 
-	// Analyze root POM
-	result, err := p.analyze(root, analysisOptions{})
+	// First, do a lightweight analysis to get properties and dependencyManagement
+	// WITHOUT resolving dependencies (to avoid caching with wrong rootDepManagement)
+	if err := p.resolveParent(root); err != nil {
+		return nil, nil, xerrors.Errorf("pom resolve error: %w", err)
+	}
+
+	rootProperties := root.properties()
+	rootDepManagementRaw := root.content.DependencyManagement.Dependencies.Dependency
+
+	// Resolve root dependencyManagement BEFORE any dependencies are cached
+	rootDepManagement := p.resolveDepManagement(rootProperties, rootDepManagementRaw)
+
+	// Now analyze root POM with the correct rootDepManagement
+	result, err := p.analyze(root, analysisOptions{
+		depManagement:  rootDepManagement,
+		rootProperties: rootProperties,
+	})
 	if err != nil {
 		return nil, nil, xerrors.Errorf("analyze error (%s): %w", p.rootPath, err)
 	}
@@ -130,39 +145,68 @@ func (p *Parser) Parse(r xio.ReadSeekerAt) ([]ftypes.Package, []ftypes.Dependenc
 	rootArt := root.artifact()
 	rootArt.Relationship = ftypes.RelationshipRoot
 
-	return p.parseRoot(rootArt, set.New[string]())
+	return p.parseRoot(rootArt, set.New[string](), rootDepManagement, rootProperties)
 }
 
 // nolint: gocyclo
-func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string]) ([]ftypes.Package, []ftypes.Dependency, error) {
+func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string], rootDepManagement []pomDependency, rootProperties map[string]string) ([]ftypes.Package, []ftypes.Dependency, error) {
 	// Prepare a queue for dependencies
 	queue := newArtifactQueue()
 
-	// Enqueue root POM
-	root.Module = false
+	root.Scope = "compile"
 	queue.enqueue(root)
 
 	var (
-		pkgs              ftypes.Packages
-		deps              ftypes.Dependencies
-		rootDepManagement []pomDependency
-		uniqArtifacts     = make(map[string]artifact)
-		uniqDeps          = make(map[string][]string)
+		pkgs          ftypes.Packages
+		deps          ftypes.Dependencies
+		uniqArtifacts = make(map[string]artifact)
+		uniqDeps      = make(map[string][]string)
 	)
 
-	// Iterate direct and transitive dependencies
+	// Iterate direct and transitive dependencies using BFS.
+	// BFS naturally implements Maven's "nearest definition wins" rule:
+	// dependencies closer to the root are dequeued first, so the first
+	// occurrence of an artifact in uniqArtifacts is always the shallowest.
+	// When two dependencies are at the same depth, declaration order
+	// in the POM determines which is processed first ("first declaration wins").
 	for !queue.IsEmpty() {
 		art := queue.dequeue()
 
 		// Modules should be handled separately so that they can have independent dependencies.
 		// It means multi-module allows for duplicate dependencies.
+		// Each module uses its OWN dependencyManagement (from its parent chain) to control
+		// transitive versions, mirroring Maven's behavior where each module is like an
+		// independent project with its own dependency management.
 		if art.Module {
 			if uniqModules.Contains(art.String()) {
 				continue
 			}
 			uniqModules.Append(art.String())
 
-			modulePkgs, moduleDeps, err := p.parseRoot(art, uniqModules)
+			// Clear Module flag before recursive call to prevent it from being skipped
+			// The recursive parseRoot will treat this as a workspace root
+			moduleArt := art
+			moduleArt.Module = false
+
+			// Get the module's cached analysis result to extract its dependencyManagement
+			// and properties. The module was already analyzed in parseModule().
+			moduleResult := p.cache.get(moduleArt)
+			moduleDepMgmt := rootDepManagement
+			moduleProps := rootProperties
+			if moduleResult != nil {
+				// Use the module's own dependencyManagement for its dependency tree.
+				// In Maven, each module uses its own management (inherited from its parent,
+				// to override transitive versions.
+				resolvedModuleDepMgmt := p.resolveDepManagement(moduleResult.properties, moduleResult.dependencyManagement)
+				// The aggregator's management takes precedence for shared entries.
+				moduleDepMgmt = p.mergeDependencyManagements(rootDepManagement, resolvedModuleDepMgmt)
+				if len(rootDepManagement) == 0 {
+					// Pure aggregator: use module's own properties for variable evaluation
+					moduleProps = moduleResult.properties
+				}
+			}
+
+			modulePkgs, moduleDeps, err := p.parseRoot(moduleArt, uniqModules, moduleDepMgmt, moduleProps)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -174,7 +218,11 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string]) ([]ftypes
 			continue
 		}
 
-		// For soft requirements, skip dependency resolution that has already been resolved.
+		// Maven dependency mediation: "nearest definition wins".
+		// Since BFS processes shallower artifacts first, the first occurrence
+		// in uniqArtifacts is always the nearest definition.
+		// At the same depth, BFS preserves declaration order ("first declaration wins").
+		// Hard version requirements (e.g., [1.0]) override soft ones regardless of depth.
 		if uniqueArt, ok := uniqArtifacts[art.Name()]; ok {
 			if !uniqueArt.Version.shouldOverride(art.Version) {
 				continue
@@ -192,25 +240,34 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string]) ([]ftypes
 			}
 		}
 
-		result, err := p.resolve(art, rootDepManagement)
+		result, err := p.resolve(art, rootDepManagement, rootProperties)
 		if err != nil {
 			return nil, nil, xerrors.Errorf("resolve error (%s): %w", art, err)
 		}
-
+		// Mark dependencies as "direct" for both root and workspace (module) artifacts.
+		// Also set depth and compute effective scope using Maven's scope transition matrix.
 		if art.Relationship == ftypes.RelationshipRoot || art.Relationship == ftypes.RelationshipWorkspace {
-			// Managed dependencies in the root POM affect transitive dependencies
-			rootDepManagement = p.resolveDepManagement(result.properties, result.dependencyManagement)
-
 			// mark its dependencies as "direct"
 			result.dependencies = lo.Map(result.dependencies, func(dep artifact, _ int) artifact {
 				dep.Relationship = ftypes.RelationshipDirect
 				return dep
 			})
+		} else {
+			// For transitive dependencies, compute effective scope using Maven's matrix
+			result.dependencies = lo.Map(result.dependencies, func(dep artifact, _ int) artifact {
+				dep.Scope = effectiveScope(art.Scope, dep.Scope)
+				return dep
+			})
 		}
+
+		// Filter out dependencies whose effective scope is empty (excluded by scope matrix)
+		result.dependencies = lo.Filter(result.dependencies, func(dep artifact, _ int) bool {
+			return dep.Scope != ""
+		})
 
 		// Parse, cache, and enqueue modules.
 		for _, relativePath := range result.modules {
-			moduleArtifact, err := p.parseModule(result.filePath, relativePath)
+			moduleArtifact, err := p.parseModule(result.filePath, relativePath, rootDepManagement, rootProperties)
 			if err != nil {
 				p.logger.Debug("Unable to parse the module",
 					log.FilePath(result.filePath), log.Err(err))
@@ -231,6 +288,7 @@ func (p *Parser) parseRoot(root artifact, uniqModules set.Set[string]) ([]ftypes
 				Licenses:     result.artifact.Licenses,
 				Relationship: art.Relationship,
 				Locations:    art.Locations,
+				Scope:        art.Scope,
 			}
 
 			// save only dependency names
@@ -289,14 +347,22 @@ func depVersion(depName string, uniqArtifacts map[string]artifact) string {
 	return ""
 }
 
-func (p *Parser) parseModule(currentPath, relativePath string) (artifact, error) {
+func (p *Parser) parseModule(currentPath, relativePath string, rootDepManagement []pomDependency, rootProperties map[string]string) (artifact, error) {
 	// modulePath: "root/" + "module/" => "root/module"
 	module, err := p.openRelativePom(currentPath, relativePath)
 	if err != nil {
 		return artifact{}, xerrors.Errorf("unable to open the relative path: %w", err)
 	}
 
-	result, err := p.analyze(module, analysisOptions{})
+	// analyze() resolves the parent chain and extracts the module's own
+	// dependencyManagement (including inherited from its parent).
+	// We pass rootDepManagement here for the initial dependency resolution,
+	// but the module's own management will be used in parseRoot() to control
+	// transitive dependency versions.
+	result, err := p.analyze(module, analysisOptions{
+		depManagement:  rootDepManagement,
+		rootProperties: rootProperties,
+	})
 	if err != nil {
 		return artifact{}, xerrors.Errorf("analyze error: %w", err)
 	}
@@ -310,36 +376,80 @@ func (p *Parser) parseModule(currentPath, relativePath string) (artifact, error)
 	return moduleArtifact, nil
 }
 
-func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency) (analysisResult, error) {
-	// If the artifact is found in cache, it is returned.
-	if result := p.cache.get(art); result != nil {
-		return *result, nil
+func (p *Parser) resolve(art artifact, rootDepManagement []pomDependency, rootProperties map[string]string) (analysisResult, error) {
+	// Check cache first - the root POM may have been cached in Parse() even
+	// with an empty version (e.g. offline mode where parent can't be resolved).
+	result := p.cache.get(art)
+	if result == nil {
+		// We can't resolve a dependency without a version.
+		// So let's just keep this dependency.
+		if art.Version.String() == "" {
+			return analysisResult{
+				artifact: art,
+			}, nil
+		}
+
+		p.logger.Debug("Resolving...", log.String("group_id", art.GroupID),
+			log.String("artifact_id", art.ArtifactID), log.String("version", art.Version.String()))
+		pomContent, err := p.tryRepository(art.GroupID, art.ArtifactID, art.Version.String())
+		if err != nil {
+			p.logger.Debug("Repository error", log.Err(err))
+		}
+		// Analyze with NO rootDepManagement and NO exclusions so the cached result
+		// is context-independent. Both will be applied as post-processing steps.
+		raw, err := p.analyze(pomContent, analysisOptions{
+			transitiveResolution: true,
+		})
+		if err != nil {
+			return analysisResult{}, xerrors.Errorf("analyze error: %w", err)
+		}
+		p.cache.put(art, raw)
+		result = &raw
 	}
 
-	// We can't resolve a dependency without a version.
-	// So let's just keep this dependency.
-	if art.Version.String() == "" {
-		return analysisResult{
-			artifact: art,
-		}, nil
+	// Post-process the cached result with context-specific overrides.
+	// We always create a copy to avoid mutating the cached result.
+	deps := make([]artifact, len(result.dependencies))
+	copy(deps, result.dependencies)
+
+	// Apply rootDepManagement: override versions/scopes for deps managed by the
+	// scanning module's BOM/parent.
+	// For root/workspace artifacts, their deps are direct/inherited - only fill
+	// empty versions (Maven doesn't override explicit versions on direct deps).
+	// For transitive artifacts, always override (Maven's dependencyManagement
+	// controls transitive dependency versions).
+	if len(rootDepManagement) > 0 {
+		overrideExplicit := art.Relationship != ftypes.RelationshipRoot && art.Relationship != ftypes.RelationshipWorkspace
+		deps = applyRootDepManagement(deps, rootDepManagement, rootProperties, overrideExplicit)
 	}
 
-	p.logger.Debug("Resolving...", log.String("group_id", art.GroupID),
-		log.String("artifact_id", art.ArtifactID), log.String("version", art.Version.String()))
-	pomContent, err := p.tryRepository(art.GroupID, art.ArtifactID, art.Version.String())
-	if err != nil {
-		p.logger.Debug("Repository error", log.Err(err))
-	}
-	result, err := p.analyze(pomContent, analysisOptions{
-		exclusions:    art.Exclusions,
-		depManagement: rootDepManagement,
-	})
-	if err != nil {
-		return analysisResult{}, xerrors.Errorf("analyze error: %w", err)
+	// Apply exclusions: filter out dependencies excluded by the parent artifact,
+	// then propagate exclusions to remaining deps so they apply transitively.
+	// Clone exclusion sets to avoid mutating the cached result.
+	if art.Exclusions != nil && art.Exclusions.Size() > 0 {
+		deps = p.filterDependencies(deps, art.Exclusions)
+		for i, dep := range deps {
+			var excl set.Set[string]
+			if dep.Exclusions != nil {
+				excl = dep.Exclusions.Clone()
+			} else {
+				excl = set.New[string]()
+			}
+			for _, e := range art.Exclusions.Items() {
+				excl.Append(e)
+			}
+			deps[i].Exclusions = excl
+		}
 	}
 
-	p.cache.put(art, result)
-	return result, nil
+	return analysisResult{
+		filePath:             result.filePath,
+		artifact:             result.artifact,
+		dependencies:         deps,
+		dependencyManagement: result.dependencyManagement,
+		properties:           result.properties,
+		modules:              result.modules,
+	}, nil
 }
 
 type analysisResult struct {
@@ -351,9 +461,55 @@ type analysisResult struct {
 	modules              []string
 }
 
+// applyRootDepManagement overrides dependency versions/scopes using rootDepManagement.
+// This mirrors what pomDependency.Resolve() does for rootDepManagement, but operates
+// on already-resolved artifact dependencies. This is needed because we cache POM analysis
+// results WITHOUT rootDepManagement applied, so different modules with different management
+// can correctly override transitive dependency versions.
+//
+// When overrideExplicit is true (transitive deps), versions are always overridden.
+// When false (direct/inherited deps), only empty versions are filled.
+func applyRootDepManagement(deps []artifact, rootDepManagement []pomDependency, rootProperties map[string]string, overrideExplicit bool) []artifact {
+	result := make([]artifact, len(deps))
+	for i, dep := range deps {
+		if managed, found := findDep(dep.Name(), rootDepManagement); found {
+			if managed.Version != "" && (overrideExplicit || dep.Version.String() == "") {
+				if rootProperties != nil {
+					dep.Version = newVersion(evaluateVariable(managed.Version, rootProperties, nil))
+				} else {
+					dep.Version = newVersion(managed.Version)
+				}
+			}
+			if managed.Scope != "" && (overrideExplicit || dep.Scope == "") {
+				if rootProperties != nil {
+					dep.Scope = evaluateVariable(managed.Scope, rootProperties, nil)
+				} else {
+					dep.Scope = managed.Scope
+				}
+			}
+			if len(managed.Exclusions.Exclusion) != 0 {
+				var excl set.Set[string]
+				if dep.Exclusions != nil {
+					excl = dep.Exclusions.Clone()
+				} else {
+					excl = set.New[string]()
+				}
+				for _, e := range managed.Exclusions.Exclusion {
+					excl.Append(fmt.Sprintf("%s:%s", e.GroupID, e.ArtifactID))
+				}
+				dep.Exclusions = excl
+			}
+		}
+		result[i] = dep
+	}
+	return result
+}
+
 type analysisOptions struct {
-	exclusions    set.Set[string]
-	depManagement []pomDependency // from the root POM
+	exclusions           set.Set[string]
+	depManagement        []pomDependency   // from the root POM
+	rootProperties       map[string]string // properties from the root POM
+	transitiveResolution bool              // true when resolving transitive dependencies (not the scanned POM)
 }
 
 func (p *Parser) analyze(pom *pom, opts analysisOptions) (analysisResult, error) {
@@ -430,13 +586,22 @@ func (p *Parser) mergeDependencyManagements(depManagements ...[]pomDependency) [
 	uniq := set.New[string]()
 	var depManagement []pomDependency
 	// The preceding argument takes precedence.
+	// Maven distinguishes non-import entries (which manage artifact versions)
+	// from import entries (which expand BOM management). A child's non-import
+	// entry must not shadow a parent's import entry for
+	// since they serve different purposes. We use a composite key
+	// that includes whether the entry is an import.
 	for _, dm := range depManagements {
 		for _, dep := range dm {
-			if uniq.Contains(dep.Name()) {
+			key := dep.Name()
+			if dep.Scope == "import" {
+				key += "|import"
+			}
+			if uniq.Contains(key) {
 				continue
 			}
 			depManagement = append(depManagement, dep)
-			uniq.Append(dep.Name())
+			uniq.Append(key)
 		}
 	}
 	return depManagement
@@ -454,16 +619,21 @@ func (p *Parser) parseDependencies(deps []pomDependency, props map[string]string
 	depManagement = p.resolveDepManagement(props, depManagement)
 
 	rootDepManagement := opts.depManagement
+	rootProps := opts.rootProperties
+	if rootProps == nil {
+		rootProps = props // Fallback to current props if root props not available
+	}
 	var dependencies []artifact
 	for _, d := range deps {
 		// Resolve dependencies
-		d = d.Resolve(props, depManagement, rootDepManagement)
+		d = d.Resolve(props, depManagement, rootDepManagement, rootProps, opts.transitiveResolution)
 
 		if (d.Scope != "" && d.Scope != "compile" && d.Scope != "runtime") || d.Optional {
 			continue
 		}
 
-		dependencies = append(dependencies, d.ToArtifact(opts))
+		artifact := d.ToArtifact(opts)
+		dependencies = append(dependencies, artifact)
 	}
 	return dependencies
 }
@@ -475,8 +645,9 @@ func (p *Parser) resolveDepManagement(props map[string]string, depManagement []p
 		if dep.Scope == "import" {
 			imports = append(imports, dep)
 		} else {
-			// Evaluate variables
-			newDepManagement = append(newDepManagement, dep.Resolve(props, nil, nil))
+			// Evaluate variables (no rootDepManagement for dependencyManagement itself)
+			resolved := dep.Resolve(props, nil, nil, nil, false)
+			newDepManagement = append(newDepManagement, resolved)
 		}
 	}
 
@@ -484,7 +655,7 @@ func (p *Parser) resolveDepManagement(props map[string]string, depManagement []p
 	// cf. https://maven.apache.org/guides/introduction/introduction-to-dependency-mechanism.html#importing-dependencies
 	for _, imp := range imports {
 		art := newArtifact(imp.GroupID, imp.ArtifactID, imp.Version, nil, props)
-		result, err := p.resolve(art, nil)
+		result, err := p.resolve(art, nil, nil)
 		if err != nil {
 			continue
 		}
@@ -494,8 +665,8 @@ func (p *Parser) resolveDepManagement(props map[string]string, depManagement []p
 		newProps := utils.MergeMaps(props, result.properties)
 		result.dependencyManagement = p.resolveDepManagement(newProps, result.dependencyManagement)
 		for k, dd := range result.dependencyManagement {
-			// Evaluate variables and overwrite dependencyManagement
-			result.dependencyManagement[k] = dd.Resolve(newProps, nil, nil)
+			// Evaluate variables and overwrite dependencyManagement (no rootDepManagement for imported POMs)
+			result.dependencyManagement[k] = dd.Resolve(newProps, nil, nil, nil, false)
 		}
 		newDepManagement = p.mergeDependencyManagements(newDepManagement, result.dependencyManagement)
 	}
